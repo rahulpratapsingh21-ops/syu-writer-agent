@@ -17,7 +17,7 @@ if defined PID (
   echo  The agent is already running.
   choice /c RO /t 10 /d O /m "  Press R to restart it (loads the latest changes), or O to just open the dashboard"
   if errorlevel 2 (
-    start "" http://localhost:3002
+    start chrome http://localhost:3002
     exit /b
   )
   echo  Restarting...
@@ -42,7 +42,7 @@ echo   Dashboard: http://localhost:3002
 echo   KEEP THIS WINDOW OPEN. Closing it stops the agent.
 echo  ==========================================================
 echo.
-start "" cmd /c "timeout /t 4 >nul & start http://localhost:3002"
+start "" cmd /c "timeout /t 4 >nul & start chrome http://localhost:3002"
 node src/server.js
 echo.
 echo  The agent stopped. Take a screenshot of any error above and send it to Claude.
