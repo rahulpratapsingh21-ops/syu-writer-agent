@@ -88,13 +88,60 @@ const SEG = { colleges: 'college', exams: 'exam', courses: 'course' };
 const selfUrlOf = ({ category, sub }) => (category === 'blogs' ? `${SITE}/blog/${sub.pageUrl}` : sub.page === 'overview' ? `${SITE}/${SEG[category]}/${sub.pageUrl}` : '');
 
 /**
- * Page title (H1) when the doc has no Title line: the page's current title, unless that is only the silo's
- * name ("Overview", which the CMS sets when a task starts) — then the subtask's meta title.
+ * Page title (H1) when the doc has no Title line: the page's current title, unless that is only a placeholder
+ * ("Overview", which the CMS sets when a task starts) — then the agent writes one in the SYU style for that silo.
  */
-function siloTitle(current, sub) {
-  const generic = !current || current.trim().toLowerCase() === siloKey(sub.page).replace(/([A-Z])/g, ' $1').trim().toLowerCase()
-    || current.trim().length < 15;
-  return generic ? sub.metaTitle || current || '' : current;
+function siloTitle(current, sub, category, entity) {
+  const placeholder = !current || current.trim().length < 15
+    || current.trim().toLowerCase() === siloKey(sub.page).replace(/([A-Z])/g, ' $1').trim().toLowerCase();
+  return placeholder ? makeH1(category, sub.page, entity) : current;
+}
+
+/** SYU-style H1 for a silo page, e.g. "Muna College of Education, Cuddalore: Admission 2027-28, Courses, Fees, …". */
+export function makeH1(category, page, entity) {
+  const now = new Date();
+  const y = now.getFullYear() + (now.getMonth() >= 8 ? 1 : 0); // from September the next admission cycle is meant
+  const yy = `${y}-${String(y + 1).slice(-2)}`;
+  // "Muna College of Education - [MCE] ,Cuddalore ,Tamil Nadu" → "Muna College of Education, Cuddalore"
+  const [rawName, city] = String(entity || '').split(/\s*,\s*/);
+  const name = rawName.replace(/\s*-?\s*\[[^\]]+\]\s*/g, ' ').replace(/\s+/g, ' ').trim();
+  const acronym = (s) => s.match(/\[([^\]]+)\]/)?.[1];
+  const sub = page.includes(':') ? page.split(':')[0] : ''; // course / specialisation name of a sub-page
+  const course = acronym(sub) || sub;
+  const N = city ? `${name}, ${city}` : name;
+  const short = acronym(entity) || name;
+  const T = {
+    colleges: {
+      overview: `${N}: Admission ${yy}, Courses, Fees, Ranking, Placements, Scholarship`,
+      coursesAndFees: `${name} Courses & Fees ${y}: Fee Structure, Eligibility & Admission`,
+      admissions: `${name} Admission ${yy}: Eligibility, Dates, Application Process`,
+      infrastructure: `${name} Infrastructure: Campus, Hostel, Labs & Facilities`,
+      scholarship: `${name} Scholarship ${y}: Eligibility, Benefits & Application`,
+      placements: `${name} Placements ${y}: Highest & Average Package, Top Recruiters`,
+      faculty: `${name} Faculty: Professors, Qualifications & Departments`,
+      reviews: `${name} Reviews: Student Ratings for Courses, Placements & Campus`,
+      gallery: `${name} Gallery: Campus, Hostel & Infrastructure Photos`,
+      newsAndArticles: `${short} News and Latest Updates ${y}`,
+      courseDetails: `${name} ${course}: Fees, Eligibility & Admission ${yy}`,
+      courseSpecialisation: `${name} ${course}: Fees, Eligibility, Cut Off & Placements`,
+    },
+    exams: {
+      overview: `${short} ${y}: Exam Date, Application Process, Admit Card, Syllabus, Pattern, Result`,
+      examDates: `${short} Exam Date ${y}: Admit Card, Result & Counselling Dates`,
+      applicationProcess: `${short} Application Form ${y}: Dates, Fees & Process`,
+      eligibilityAndPreparation: `${short} ${y} Eligibility, Syllabus & Preparation Strategy`,
+      examDetails: `${short} ${y} Exam Details: Date, Pattern, Merit List, Old Question Papers and Answer Keys`,
+      results: `${short} Result ${y}: Release Date, Scorecard, Cutoff & Merit List`,
+      syllabus: `${short} Syllabus ${y}: Subject-wise Topics & PDF Download`,
+      pastQuestionPapers: `${short} Previous Year Question Papers: Download PDFs with Solutions`,
+      acceptingColleges: `${short} Accepting Colleges ${y}: List of Colleges, Cutoff & Fees`,
+    },
+    courses: {
+      overview: `${short} Course ${y}: Full Form, Admission, Eligibility, Entrance Exams, Top Colleges, Fees, Syllabus, Jobs, Salary`,
+      specialisation: `${short} ${sub}: Course Details, Syllabus, Eligibility, Fees, Salary, Top Colleges & Career Scope`,
+    },
+  };
+  return T[category]?.[siloKey(page)] || `${N} ${siloKey(page).replace(/([A-Z])/g, ' $1').toLowerCase()} ${y}`;
 }
 
 // Words that say nothing about which college/exam/course a doc is about.
@@ -142,6 +189,7 @@ export async function prepare(row, opts = {}) {
     if (!found || found.category === 'blogs') {
       const doc = await convertDoc(row.docUrl, { selfUrl: found ? selfUrlOf(found) : '', title: row.title });
       item.h1 = doc.h1 || row.title;
+      item.h1Source = doc.h1 ? 'doc' : 'sheet';
       Object.assign(item, { html: doc.html, excerpt: doc.excerpt, stats: doc.stats, heroText: heroText(item.h1), autoLinks: doc.autoLinks, related: doc.related });
       item.warnings.push(...doc.warnings);
     } else {
@@ -149,14 +197,17 @@ export async function prepare(row, opts = {}) {
       if (!silo) throw new Error('Could not read this silo\'s sections from the CMS');
       const doc = await convertSilo(row.docUrl, silo, { inOrder: found.category === 'courses', selfUrl: selfUrlOf(found) });
       const entity = found.ver?.version.entity || found.task.title;
-      item.h1 = doc.h1 || siloTitle(found.ver?.version.pageDisplayTitle, found.sub);
-      if (!doc.h1) item.warnings.push(`The doc has no Title line — page title (H1): "${item.h1}"`);
+      item.h1 = doc.h1 || siloTitle(found.ver?.version.pageDisplayTitle, found.sub, found.category, entity);
+      item.h1Source = doc.h1 ? 'doc' : item.h1 === found.ver?.version.pageDisplayTitle ? 'current' : 'agent';
       Object.assign(item, { html: doc.preview, sections: doc.sections, untouched: doc.untouched, stats: doc.stats, autoLinks: doc.autoLinks });
       item.warnings.push(...doc.warnings);
       if (!doc.sections.length) item.errors.push('No section of this page was found in the doc');
       if (!mentionsEntity(entity, doc.preview)) (opts.allowOtherEntity ? item.warnings : item.errors).push(`The doc never mentions "${entity}" — it looks like it is about a different ${found.category.slice(0, -1)}. Check the Doc URL.`);
     }
   } catch (e) { item.errors.push(e.message); }
+  // An H1 typed in the dashboard wins over the doc / the agent's own.
+  if (String(row.h1Override || '').trim()) { item.h1 = row.h1Override.trim(); item.h1Source = 'yours'; }
+  if (item.h1 !== undefined && !String(item.h1).trim()) item.errors.push('The H1 (page title) is empty');
   return item;
 }
 
@@ -191,7 +242,7 @@ export async function upload(row, { submit = false, allowOtherEntity = false } =
   } else {
     // Convert again on the real draft (the preview may have used the published page's layout).
     const doc = await convertSilo(row.docUrl, ver.version[key], { inOrder: category === 'courses', selfUrl: selfUrlOf({ category, sub }) });
-    data = { ...current, pageDisplayTitle: doc.h1 || siloTitle(current.pageDisplayTitle, sub), [key]: doc.silo };
+    data = { ...current, pageDisplayTitle: String(row.h1Override || '').trim() || doc.h1 || siloTitle(current.pageDisplayTitle, sub, category, current.entity), [key]: doc.silo };
     check = (v) => doc.sections.every((s) => (v[key]?.[s.key]?.content?.html || '').length >= s.chars * 0.9);
   }
   await savePage(collection, ver.parent, data, 'saveContent');

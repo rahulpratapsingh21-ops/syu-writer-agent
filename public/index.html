@@ -50,6 +50,7 @@
   .tab.clear { color:var(--fail); border-color:var(--fail); }
   .tabs .sep { width:1px; background:var(--line); margin:0 6px; }
   .sections { font-size:13px; margin:6px 0; padding-left:18px; } .sections li { margin:2px 0; }
+  .h1box { margin-bottom:6px; } .h1box input { width:100%; font-size:16px; font-weight:700; }
   @media (max-width:760px) { .grid { grid-template-columns:1fr; } .brand h1 { padding-left:0; border-left:0; font-size:19px; } .acct { margin-left:0; width:100%; text-align:left; } }
 </style>
 </head>
@@ -65,6 +66,9 @@
     <div class="row">
       <label>Task ID <input id="mTask" inputmode="numeric" style="width:110px" placeholder="e.g. 48598"></label>
       <label style="flex:1;min-width:260px">Google Doc link <input id="mDoc" placeholder="https://docs.google.com/document/d/…/edit"></label>
+    </div>
+    <div class="row" style="margin-top:8px">
+      <label style="flex:1;min-width:260px">H1 / page title <span class="muted">(optional — empty = the doc's Title line, or the agent writes one)</span><input id="mH1" placeholder="e.g. Muna College of Education, Cuddalore: Admission 2027-28, Courses, Fees…"></label>
     </div>
     <div class="row" style="margin-top:8px">
       <label>Writer <select id="mWriter"><option value="">— choose writer —</option></select></label>
@@ -135,7 +139,7 @@ $('clearAll').onclick = () => {
   sheet = null; items = [];
   $('url').value = ''; store.set('wa-url', ''); $('sheetName').textContent = ''; $('step2').hidden = true; $('tab').innerHTML = '';
   $('start').value = ''; $('end').value = ''; $('status').textContent = '';
-  for (const id of ['mTask', 'mDoc', 'mAuthor', 'mLive']) $(id).value = '';
+  for (const id of ['mTask', 'mDoc', 'mAuthor', 'mLive', 'mH1']) $(id).value = '';
   $('mWriter').value = ''; $('mStatus').textContent = '';
   render();
 };
@@ -143,7 +147,7 @@ api('api/writers').then((ws) => { $('mWriter').innerHTML = '<option value="">—
   .catch(() => {});
 $('mWriter').onchange = () => { $('mAuthor').value = $('mWriter').value; };
 $('mPreview').onclick = async () => {
-  const row = { row: 1, manual: true, taskId: $('mTask').value.trim(), docUrl: $('mDoc').value.trim(), writer: $('mAuthor').value.trim(), liveUrl: $('mLive').value.trim() };
+  const row = { row: 1, manual: true, taskId: $('mTask').value.trim(), docUrl: $('mDoc').value.trim(), writer: $('mAuthor').value.trim(), liveUrl: $('mLive').value.trim(), h1Override: $('mH1').value.trim() };
   if (!row.taskId || !row.docUrl) { $('mStatus').textContent = 'Enter the Task ID and the Google Doc link'; return; }
   $('mPreview').disabled = true; $('mStatus').textContent = 'Reading the Google Doc and the CMS draft…'; items = []; render();
   try { items = [await api('api/preview-manual', row)]; $('mStatus').textContent = ''; } catch (e) { $('mStatus').textContent = 'Error: ' + e.message; }
@@ -200,8 +204,12 @@ function render() {
       : `<div><img loading="lazy" src="api/hero?h1=${encodeURIComponent(it.h1)}" alt="Hero image preview"><div class="muted" style="font-size:12px;margin-top:4px">Hero image (made by the agent)</div></div>`;
     const meta = isSilo ? `Task ${esc(it.taskId)} · subtask ${esc(it.subTaskId ?? '—')} · page: ${esc(it.pageUrl ?? '')} · H1 = page title`
       : `Task ${esc(it.taskId)} · subtask ${esc(it.subTaskId ?? '—')} · /blog/${esc(it.pageUrl ?? '')} · author: <b>${esc(it.writer)}</b> · date: today`;
-    const body = it.h1 ? `<div class="grid">${side}
-      <div><p class="h1">${esc(it.h1)}</p><div class="muted" style="font-size:13px">${meta}</div>
+    const h1From = { doc: 'from the doc\'s Title line', sheet: 'from the sheet Title (the doc has no Title line)', agent: 'written by the agent (the doc has no Title line)', current: 'the page\'s current title', yours: 'typed by you' }[it.h1Source] || '';
+    const h1Box = it.done ? `<p class="h1">${esc(it.h1)}</p>`
+      : `<label class="h1box">H1 / page title <span class="muted">— ${esc(h1From)}; you can change it</span>
+          <input type="text" value="${esc(it.h1Override ?? it.h1)}" onchange="items[${i}].h1Override=this.value.trim(); items[${i}].h1Source='yours'; render()"></label>`;
+    const body = it.h1 !== undefined ? `<div class="grid">${side}
+      <div>${h1Box}<div class="muted" style="font-size:13px">${meta}</div>
       ${chips}<div style="font-size:14px">${esc(it.excerpt || '')}</div>
       <div class="row" style="margin-top:8px"><button class="secondary small" onclick="togglePreview(${i})">${it.showHtml ? 'Hide' : 'Show'} content preview</button>
       <a class="muted" href="${esc(it.docUrl)}" target="_blank" rel="noopener" style="font-size:13px">Open Google Doc ↗</a></div>
