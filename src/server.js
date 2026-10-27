@@ -34,6 +34,8 @@ app.post('/api/preview', route(async (req) => {
   for (const r of rows) out.push(await prepare(r, { allowOtherEntity: !!req.body.allowOtherEntity }));
   return out;
 }));
+// Re-read one row (e.g. after its silo was picked from the dropdown).
+app.post('/api/preview-row', route((req) => prepare(req.body.row, { allowOtherEntity: !!req.body.allowOtherEntity })));
 app.post('/api/preview-manual', route((req) => prepare({ row: 1, manual: true, ...req.body }, { allowOtherEntity: !!req.body.allowOtherEntity })));
 // Writers for the manual dropdown; the display name ("Puja Das") is used as the blog author name.
 app.get('/api/writers', route(async () => {
@@ -51,7 +53,7 @@ app.post('/api/upload', route(async (req) => {
   return r;
 }));
 app.post('/api/submit', route(async (req) => {
-  const r = await submitDraft(req.body.taskId, req.body.liveUrl);
+  const r = await submitDraft(req.body.taskId, req.body.liveUrl, req.body.subTaskId);
   console.log(`[submit] task ${r.taskId}: ${r.status}`);
   return r;
 }));

@@ -52,6 +52,8 @@
   .tabs .sep { width:1px; background:var(--line); margin:0 6px; }
   .sections { font-size:13px; margin:6px 0; padding-left:18px; } .sections li { margin:2px 0; }
   .test-opt { color:var(--warn); font-size:13px; }
+  .choice { border:1px solid var(--warn); background:var(--warn-bg); border-radius:8px; padding:8px 12px; margin:8px 0; }
+  .choice label { flex-direction:row; align-items:center; gap:8px; color:var(--text); font-weight:600; flex-wrap:wrap; }
   .h1box { margin-bottom:6px; } .h1box input { width:100%; font-size:16px; font-weight:700; }
   @media (max-width:760px) { .grid { grid-template-columns:1fr; } .brand h1 { padding-left:0; border-left:0; font-size:19px; } .acct { margin-left:0; width:100%; text-align:left; } }
 </style>
@@ -75,7 +77,6 @@
     <div class="row" style="margin-top:8px">
       <label>Writer <select id="mWriter"><option value="">— choose writer —</option></select></label>
       <label>Author name (blogs) <input id="mAuthor" style="width:200px" placeholder="shown on the blog"></label>
-      <label style="flex:1;min-width:240px">Live URL <span class="muted">(only for a college / exam / course task with several silos)</span><input id="mLive" placeholder="https://www.selectyouruniversity.com/college/…"></label>
       <button id="mPreview">Preview</button>
       <span class="muted" id="mStatus"></span>
     </div>
@@ -102,7 +103,7 @@
       <span class="muted" id="status"></span>
     </div>
     <label class="opt test-opt" style="margin-top:8px"><input type="checkbox" id="sTest"> Test: allow content about a different college / exam / course</label>
-    <div class="muted" style="margin-top:8px;font-size:13px">Each row needs a <b>Task ID</b> and <b>Doc URL</b> (a Google Doc, or an SYU page link to copy its content); blogs also need the <b>Writer</b> (author name). For a college / exam / course task with several silos, put the silo page link in <b>Live URL</b>. Nothing is uploaded until you click <b>Upload</b>.</div>
+    <div class="muted" style="margin-top:8px;font-size:13px">Each row needs a <b>Task ID</b> and <b>Doc URL</b> (a Google Doc, or an SYU page link to copy its content); blogs also need the <b>Writer</b> (author name). If a college / exam / course task has several silos, you pick the silo on the row. Nothing is uploaded until you click <b>Upload</b>.</div>
   </div>
   </div>
 
@@ -144,7 +145,7 @@ $('clearAll').onclick = () => {
   sheet = null; items = [];
   $('url').value = ''; store.set('wa-url', ''); $('sheetName').textContent = ''; $('step2').hidden = true; $('tab').innerHTML = '';
   $('start').value = ''; $('end').value = ''; $('status').textContent = '';
-  for (const id of ['mTask', 'mDoc', 'mAuthor', 'mLive', 'mH1']) $(id).value = '';
+  for (const id of ['mTask', 'mDoc', 'mAuthor', 'mH1']) $(id).value = '';
   $('mWriter').value = ''; $('mStatus').textContent = ''; $('mTest').checked = false; $('sTest').checked = false; testMode = false;
   render();
 };
@@ -152,7 +153,7 @@ api('api/writers').then((ws) => { $('mWriter').innerHTML = '<option value="">—
   .catch(() => {});
 $('mWriter').onchange = () => { $('mAuthor').value = $('mWriter').value; };
 $('mPreview').onclick = async () => {
-  const row = { row: 1, manual: true, taskId: $('mTask').value.trim(), docUrl: $('mDoc').value.trim(), writer: $('mAuthor').value.trim(), liveUrl: $('mLive').value.trim(), h1Override: $('mH1').value.trim() };
+  const row = { row: 1, manual: true, taskId: $('mTask').value.trim(), docUrl: $('mDoc').value.trim(), writer: $('mAuthor').value.trim(), h1Override: $('mH1').value.trim() };
   if (!row.taskId || !row.docUrl) { $('mStatus').textContent = 'Enter the Task ID and the Google Doc link'; return; }
   $('mPreview').disabled = true; $('mStatus').textContent = 'Reading the Google Doc and the CMS draft…'; items = []; render();
   testMode = $('mTest').checked;
@@ -205,7 +206,12 @@ function render() {
     const pick = isReady(it) ? `<label class="opt" title="Untick to leave this row out"><input type="checkbox" ${it.skip ? '' : 'checked'} onchange="items[${i}].skip=!this.checked; render()"></label>` : '';
     const pill = it.done ? `<span class="pill pass">${it.done.submitted ? 'SUBMITTED FOR REVIEW' : 'SAVED AS DRAFT'}</span>`
       : it.errors.length ? '<span class="pill fail">CANNOT UPLOAD</span>' : `<span class="pill warn">READY · draft ${esc(it.status || '')}</span>`;
-    const msgs = it.errors.map((e) => `<div class="msg err">✖ ${esc(e)}</div>`).join('') + it.warnings.map((w) => `<div class="msg wrn">⚠ ${esc(w)}</div>`).join('');
+    const msgs = it.errors.map((e) => `<div class="msg err">✖ ${esc(e)}</div>`).join('') + it.warnings.map((w) => `<div class="msg wrn">⚠ ${esc(w)}</div>`).join('')
+      // Task with several silos: pick one here; the row is read again for that silo.
+      + (it.subtaskOptions ? `<div class="choice"><label>Which silo is this doc for? <select onchange="pickSilo(${i}, this.value)"><option value="">— choose a silo —</option>${it.subtaskOptions
+        .map((o) => `<option value="${esc(o.subTaskId)}">${esc(o.label)} — subtask ${esc(o.subTaskId)} (${esc(o.status)})</option>`).join('')}</select></label>
+        <span class="muted" id="pick${i}"></span></div>` : '')
+      + (it.subTaskId && it.pickedSilo ? `<div class="muted" style="font-size:13px">Silo: <b>${esc(it.silo)}</b> (subtask ${esc(it.subTaskId)}) — <a href="#" onclick="items[${i}].subTaskId=''; items[${i}].pickedSilo=false; pickSilo(${i}, ''); return false">change</a></div>` : '');
     const chips = it.stats ? `<div class="chips">${Object.entries(statLabels).filter(([k]) => it.stats[k] !== undefined).map(([k, l]) => `<span class="chip">${it.stats[k]} ${l}</span>`).join('')}</div>${linkList(it)}` : '';
     const isSilo = it.category && it.category !== 'blogs';
     const side = isSilo
@@ -256,10 +262,20 @@ async function uploadOne(i, btn) {
   try { it.done = await api('api/upload', { row: it, submit: $('submit').checked, allowOtherEntity: testMode }); render(); return true; }
   catch (e) { if (btn) { btn.disabled = false; btn.textContent = 'Upload this row'; } const el = $('err' + i); if (el) el.textContent = '✖ ' + e.message; return false; }
 }
+/** Silo picked for a task with several silos → read the row again for that silo (empty = show the choice again). */
+async function pickSilo(i, subTaskId) {
+  const it = items[i];
+  const pick = $('pick' + i); if (pick) pick.textContent = subTaskId ? '⏳ Reading the doc for this silo…' : '';
+  try {
+    const { errors, warnings, sections, untouched, h1, h1Source, html, stats, autoLinks, subtaskOptions, ...rest } = it;
+    items[i] = { ...(await api('api/preview-row', { row: { ...rest, subTaskId }, allowOtherEntity: testMode })), pickedSilo: !!subTaskId };
+  } catch (e) { if (pick) pick.textContent = '✖ ' + e.message; return; }
+  render();
+}
 async function submitOne(i, btn) {
   const it = items[i];
   btn.disabled = true; btn.textContent = 'Submitting…';
-  try { const r = await api('api/submit', { taskId: it.taskId, liveUrl: it.liveUrl }); it.done = { ...(it.done || { taskId: it.taskId }), submitted: true, status: r.status }; render(); }
+  try { const r = await api('api/submit', { taskId: it.taskId, liveUrl: it.liveUrl, subTaskId: it.subTaskId }); it.done = { ...(it.done || { taskId: it.taskId }), submitted: true, status: r.status }; render(); }
   catch (e) { btn.disabled = false; btn.textContent = 'Submit for review (no re-upload)'; const el = $('err' + i); if (el) el.textContent = '✖ ' + e.message; }
 }
 $('uploadAll').onclick = async () => {

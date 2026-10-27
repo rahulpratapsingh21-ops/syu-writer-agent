@@ -21,7 +21,10 @@ function todayIST() {
 
 /** Silo field on the page: "overview" → overview, "MBBS:courseDetails" → courseDetails, "General:specialisation" → specialisation. */
 const siloKey = (page) => (page.includes(':') ? page.split(':').pop() : page);
-const siloName = (page) => page.replace(/:(\w+)$/, (_, k) => ` (${k.replace(/([A-Z])/g, ' $1').toLowerCase()})`);
+// "coursesAndFees" → "Courses And Fees"; "MBBS [MBBS]:courseDetails" → "MBBS [MBBS] (course details)"
+const siloName = (page) => (page.includes(':')
+  ? page.replace(/:(\w+)$/, (_, k) => ` (${k.replace(/([A-Z])/g, ' $1').toLowerCase()})`)
+  : page.replace(/([A-Z])/g, ' $1').replace(/^./, (c) => c.toUpperCase()));
 
 /** Text length of a draft: the blog html, or all section html of the silo. */
 function contentLength(version, category, key) {
@@ -31,14 +34,16 @@ function contentLength(version, category, key) {
   return walk(version[key]);
 }
 
-/** Pick the subtask a sheet row is about: the blog subtask, the only silo, or the silo whose page URL is in Live URL. */
-function pickSubtask(subs, category, liveUrl) {
+/**
+ * Pick the subtask a row is about: the one chosen in the dashboard, the blog subtask, the only silo, or the silo
+ * whose page URL is in Live URL. null = the task has several silos and none was chosen yet.
+ */
+function pickSubtask(subs, category, liveUrl, subTaskId) {
+  if (subTaskId) return subs.find((s) => String(s.subTaskId) === String(subTaskId)) || null;
   if (category === 'blogs') return subs.find((s) => s.page === 'blogContent') || subs[0];
   if (subs.length === 1) return subs[0];
   const last = (() => { try { return new URL(liveUrl).pathname.split('/').filter(Boolean).pop(); } catch { return ''; } })();
-  const hit = last && subs.find((s) => s.pageUrl === last);
-  if (hit) return hit;
-  throw new Error(`This task has ${subs.length} silos (${subs.map((s) => siloName(s.page)).join(', ')}) — put the silo page link in Live URL so the agent knows which one this doc is for`);
+  return (last && subs.find((s) => s.pageUrl === last)) || null;
 }
 
 /**
@@ -46,14 +51,18 @@ function pickSubtask(subs, category, liveUrl) {
  * A task the writer has not started yet has no draft: with start = true the agent clicks "Start" (as the writer
  * would), which makes the CMS create the draft; otherwise ver is null and notStarted is true.
  */
-async function findDraft(taskId, liveUrl, { start = false } = {}) {
+async function findDraft(taskId, liveUrl, { start = false, subTaskId = '' } = {}) {
   const task = (await cmsGet(`/tasks?${qs({ 'where[taskId][equals]': taskId, limit: 1, depth: 0 })}`)).docs[0];
-  if (!task) throw new Error(`Task ${taskId} not found in the CMS`);
+  if (!task) throw new Error(`Task ${taskId} not found in the CMS (the writer agent only sees tasks assigned to its CMS login)`);
   const where = PAGES[task.contentCategory];
   if (!where) throw new Error(`Task ${taskId} is a "${task.contentCategory}" task — not supported`);
   const subs = (await cmsGet(`/subTasks?${qs({ 'where[parentTaskId][equals]': task.id, limit: 50, depth: 0 })}`)).docs;
   if (!subs.length) throw new Error(`Task ${taskId} has no subtask`);
-  const sub = pickSubtask(subs, task.contentCategory, liveUrl);
+  const sub = pickSubtask(subs, task.contentCategory, liveUrl, subTaskId);
+  if (!sub) {
+    if (subTaskId) throw new Error(`Subtask ${subTaskId} is not part of task ${taskId}`);
+    return { task, category: task.contentCategory, collection: where.collection, subs, chooseSilo: true };
+  }
   const base = { task, sub, category: task.contentCategory, key: siloKey(sub.page), collection: where.collection };
   const draft = async () => (await cmsGet(`/${where.versions}?${qs({ 'where[version.subTaskRef][equals]': sub.id, sort: '-updatedAt', limit: 1, depth: 0 })}`)).docs[0];
   let ver = await draft();
@@ -174,7 +183,14 @@ export async function prepare(row, opts = {}) {
   if (item.errors.length) return item;
   let found = null;
   try {
-    found = await findDraft(row.taskId, row.liveUrl);
+    found = await findDraft(row.taskId, row.liveUrl, { subTaskId: row.subTaskId });
+    if (found.chooseSilo) {
+      // Several silos and none chosen: list them so the dashboard can ask; the doc is read once one is picked.
+      Object.assign(item, { taskTitle: found.task.title, category: found.category, status: 'choose silo',
+        subtaskOptions: found.subs.map((s) => ({ subTaskId: s.subTaskId, label: siloName(s.page), pageUrl: s.pageUrl, status: s.status })) });
+      item.errors.push(`This task has ${found.subs.length} silos — choose which one this doc is for`);
+      return item;
+    }
     const { task, sub, ver, notStarted, category, key } = found;
     Object.assign(item, { taskTitle: task.title, category, subTaskId: sub.subTaskId, pageUrl: sub.pageUrl, silo: category === 'blogs' ? null : siloName(sub.page) });
     if (category === 'blogs') {
@@ -220,13 +236,16 @@ export async function prepare(row, opts = {}) {
 }
 
 /** Submit an already-uploaded draft for review (the writer's "Submit" button). */
-export async function submitDraft(taskId, liveUrl) {
-  const { ver, collection, category, key } = await findDraft(taskId, liveUrl);
+export async function submitDraft(taskId, liveUrl, subTaskId = '') {
+  const pick = { subTaskId };
+  const found = await findDraft(taskId, liveUrl, pick);
+  if (found.chooseSilo) throw new Error('This task has several silos — choose which one first');
+  const { ver, collection, category, key } = found;
   if (!EDITABLE.includes(ver.version.status)) throw new Error(`Draft is "${ver.version.status}" — already with the editor`);
   if (contentLength(ver.version, category, key) <= HAS_CONTENT) throw new Error('This draft has no content yet — upload it first');
   const { createdAt, updatedAt, ...data } = ver.version;
   await savePage(collection, ver.parent, data, 'submitContentForCW');
-  const { task, ver: after } = await findDraft(taskId, liveUrl);
+  const { task, ver: after } = await findDraft(taskId, liveUrl, pick);
   return { taskId, status: after.version.status, taskStatus: task.status, submitted: true };
 }
 
@@ -234,7 +253,7 @@ export async function submitDraft(taskId, liveUrl) {
 export async function upload(row, { submit = false, allowOtherEntity = false } = {}) {
   const item = await prepare(row, { allowOtherEntity });
   if (item.errors.length) throw new Error(item.errors.join(' · '));
-  const { ver, collection, category, key, sub } = await findDraft(row.taskId, row.liveUrl, { start: true });
+  const { ver, collection, category, key, sub } = await findDraft(row.taskId, row.liveUrl, { start: true, subTaskId: row.subTaskId });
   const { createdAt, updatedAt, ...current } = ver.version;
   let data, heroUrl = '', check;
 
@@ -256,9 +275,9 @@ export async function upload(row, { submit = false, allowOtherEntity = false } =
   await savePage(collection, ver.parent, data, 'saveContent');
 
   // Read the draft back to confirm the content really landed.
-  const after = (await findDraft(row.taskId, row.liveUrl)).ver.version;
+  const after = (await findDraft(row.taskId, row.liveUrl, { subTaskId: row.subTaskId })).ver.version;
   if (!check(after)) throw new Error('The CMS accepted the save, but the draft does not show the new content — check it in the CMS');
   if (submit) await savePage(collection, ver.parent, { ...data, status: after.status }, 'submitContentForCW');
-  const final = (await findDraft(row.taskId, row.liveUrl)).ver.version;
+  const final = (await findDraft(row.taskId, row.liveUrl, { subTaskId: row.subTaskId })).ver.version;
   return { row: row.row, taskId: row.taskId, h1: item.h1, status: final.status, chars: contentLength(final, category, key), heroUrl, submitted: submit, stats: item.stats, sections: item.sections };
 }
