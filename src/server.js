@@ -30,10 +30,10 @@ app.post('/api/connect', route(async (req) => {
 app.post('/api/preview', route(async (req) => {
   const rows = (await readRows(req.body.sheetId, req.body.gid, req.body.start, req.body.end || null)).map((r) => ({ ...r, tab: req.body.name }));
   const out = [];
-  for (const r of rows) out.push(await prepare(r)); // one at a time: each row reads a Google Doc and the CMS
+  for (const r of rows) out.push(await prepare(r, { allowOtherEntity: !!req.body.allowOtherEntity })); // one at a time: each row reads a doc and the CMS
   return out;
 }));
-app.post('/api/preview-manual', route((req) => prepare({ row: 1, manual: true, ...req.body })));
+app.post('/api/preview-manual', route((req) => prepare({ row: 1, manual: true, ...req.body }, { allowOtherEntity: !!req.body.allowOtherEntity })));
 // Writers for the manual dropdown; the display name ("Puja Das") is used as the blog author name.
 app.get('/api/writers', route(async () => {
   const users = (await cmsGet('/users?limit=500&depth=1')).docs.filter((u) => /writer/i.test(u.role?.name || ''));
@@ -45,8 +45,8 @@ app.get('/api/hero', async (req, res) => {
   try { res.type('image/webp').send(await makeHero(String(req.query.h1 || ''))); } catch (e) { res.status(400).send(e.message); }
 });
 app.post('/api/upload', route(async (req) => {
-  const r = await upload(req.body.row, { submit: !!req.body.submit });
-  console.log(`[upload] row ${r.row} → task ${r.taskId}: ${r.status}${r.submitted ? ' (submitted)' : ''}`);
+  const r = await upload(req.body.row, { submit: !!req.body.submit, allowOtherEntity: !!req.body.allowOtherEntity });
+  console.log(`[upload] row ${r.row} → task ${r.taskId}: ${r.status}${r.submitted ? ' (submitted)' : ''}${req.body.allowOtherEntity ? ' [test mode]' : ''}`);
   return r;
 }));
 app.post('/api/submit', route(async (req) => {

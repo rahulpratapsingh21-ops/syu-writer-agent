@@ -50,6 +50,7 @@
   .tab.clear { color:var(--fail); border-color:var(--fail); }
   .tabs .sep { width:1px; background:var(--line); margin:0 6px; }
   .sections { font-size:13px; margin:6px 0; padding-left:18px; } .sections li { margin:2px 0; }
+  .test-opt { color:var(--warn); font-size:13px; }
   .h1box { margin-bottom:6px; } .h1box input { width:100%; font-size:16px; font-weight:700; }
   @media (max-width:760px) { .grid { grid-template-columns:1fr; } .brand h1 { padding-left:0; border-left:0; font-size:19px; } .acct { margin-left:0; width:100%; text-align:left; } }
 </style>
@@ -65,7 +66,7 @@
     <div class="step"><span class="num">1</span><b>Upload one Google Doc</b></div>
     <div class="row">
       <label>Task ID <input id="mTask" inputmode="numeric" style="width:110px" placeholder="e.g. 48598"></label>
-      <label style="flex:1;min-width:260px">Google Doc link <input id="mDoc" placeholder="https://docs.google.com/document/d/…/edit"></label>
+      <label style="flex:1;min-width:260px">Google Doc link <span class="muted">— or an SYU college / exam / course page link to copy its content</span><input id="mDoc" placeholder="https://docs.google.com/document/d/…/edit  or  https://www.selectyouruniversity.com/course/…"></label>
     </div>
     <div class="row" style="margin-top:8px">
       <label style="flex:1;min-width:260px">H1 / page title <span class="muted">(optional — empty = the doc's Title line, or the agent writes one)</span><input id="mH1" placeholder="e.g. Muna College of Education, Cuddalore: Admission 2027-28, Courses, Fees…"></label>
@@ -77,6 +78,7 @@
       <button id="mPreview">Preview</button>
       <span class="muted" id="mStatus"></span>
     </div>
+    <label class="opt test-opt" style="margin-top:8px"><input type="checkbox" id="mTest"> Test: allow content about a different college / exam / course</label>
   </div>
 
   <div id="sheetPanel">
@@ -98,7 +100,8 @@
       <button id="preview">Preview</button>
       <span class="muted" id="status"></span>
     </div>
-    <div class="muted" style="margin-top:8px;font-size:13px">Each row needs a <b>Task ID</b> and <b>Doc URL</b>; blogs also need the <b>Writer</b> (author name). For a college / exam / course task with several silos, put the silo page link in <b>Live URL</b>. Nothing is uploaded until you click <b>Upload</b>.</div>
+    <label class="opt test-opt" style="margin-top:8px"><input type="checkbox" id="sTest"> Test: allow content about a different college / exam / course</label>
+    <div class="muted" style="margin-top:8px;font-size:13px">Each row needs a <b>Task ID</b> and <b>Doc URL</b> (a Google Doc, or an SYU page link to copy its content); blogs also need the <b>Writer</b> (author name). For a college / exam / course task with several silos, put the silo page link in <b>Live URL</b>. Nothing is uploaded until you click <b>Upload</b>.</div>
   </div>
   </div>
 
@@ -121,6 +124,7 @@ const api = async (url, body) => {
 };
 const store = { get: (k) => { try { return localStorage.getItem(k); } catch { return null; } }, set: (k, v) => { try { localStorage.setItem(k, v); } catch {} } };
 let sheet = null, items = [], busy = false;
+let testMode = false; // "Test: allow content about a different college / exam / course" — as ticked at Preview time
 
 api('api/account').then((a) => { $('acctEmail').textContent = a.email; $('acctCms').href = a.cmsUrl.replace(/\/$/, '') + '/admin'; })
   .catch((e) => { $('acctEmail').textContent = 'not connected — ' + e.message; });
@@ -140,7 +144,7 @@ $('clearAll').onclick = () => {
   $('url').value = ''; store.set('wa-url', ''); $('sheetName').textContent = ''; $('step2').hidden = true; $('tab').innerHTML = '';
   $('start').value = ''; $('end').value = ''; $('status').textContent = '';
   for (const id of ['mTask', 'mDoc', 'mAuthor', 'mLive', 'mH1']) $(id).value = '';
-  $('mWriter').value = ''; $('mStatus').textContent = '';
+  $('mWriter').value = ''; $('mStatus').textContent = ''; $('mTest').checked = false; $('sTest').checked = false; testMode = false;
   render();
 };
 api('api/writers').then((ws) => { $('mWriter').innerHTML = '<option value="">— choose writer —</option>' + ws.map((w) => `<option value="${esc(w.name)}">${esc(w.name)} (${esc(w.email)})</option>`).join(''); })
@@ -150,7 +154,8 @@ $('mPreview').onclick = async () => {
   const row = { row: 1, manual: true, taskId: $('mTask').value.trim(), docUrl: $('mDoc').value.trim(), writer: $('mAuthor').value.trim(), liveUrl: $('mLive').value.trim(), h1Override: $('mH1').value.trim() };
   if (!row.taskId || !row.docUrl) { $('mStatus').textContent = 'Enter the Task ID and the Google Doc link'; return; }
   $('mPreview').disabled = true; $('mStatus').textContent = 'Reading the Google Doc and the CMS draft…'; items = []; render();
-  try { items = [await api('api/preview-manual', row)]; $('mStatus').textContent = ''; } catch (e) { $('mStatus').textContent = 'Error: ' + e.message; }
+  testMode = $('mTest').checked;
+  try { items = [await api('api/preview-manual', { ...row, allowOtherEntity: testMode })]; $('mStatus').textContent = ''; } catch (e) { $('mStatus').textContent = 'Error: ' + e.message; }
   render(); $('mPreview').disabled = false;
 };
 if (store.get('wa-mode') === 'manual') setMode('manual');
@@ -173,7 +178,8 @@ $('preview').onclick = async () => {
   const t = sheet.tabs.find((x) => x.gid === $('tab').value);
   if (!$('start').value) { $('status').textContent = 'Enter the row to start from'; return $('start').focus(); }
   $('preview').disabled = true; $('status').textContent = 'Reading the sheet, Google Docs and CMS drafts… (a few seconds per row)'; items = []; render();
-  try { items = await api('api/preview', { sheetId: sheet.sheetId, gid: t.gid, name: t.name, start: $('start').value, end: $('end').value }); $('status').textContent = `${items.length} row(s)`; }
+  testMode = $('sTest').checked;
+  try { items = await api('api/preview', { sheetId: sheet.sheetId, gid: t.gid, name: t.name, start: $('start').value, end: $('end').value, allowOtherEntity: testMode }); $('status').textContent = `${items.length} row(s)`; }
   catch (e) { $('status').textContent = 'Error: ' + e.message; }
   render(); $('preview').disabled = false;
 };
@@ -242,7 +248,7 @@ function togglePreview(i) { items[i].showHtml = !items[i].showHtml; render(); }
 async function uploadOne(i, btn) {
   const it = items[i];
   if (btn) { btn.disabled = true; btn.textContent = 'Uploading…'; }
-  try { it.done = await api('api/upload', { row: it, submit: $('submit').checked }); render(); return true; }
+  try { it.done = await api('api/upload', { row: it, submit: $('submit').checked, allowOtherEntity: testMode }); render(); return true; }
   catch (e) { if (btn) { btn.disabled = false; btn.textContent = 'Upload this row'; } const el = $('err' + i); if (el) el.textContent = '✖ ' + e.message; return false; }
 }
 async function submitOne(i, btn) {
