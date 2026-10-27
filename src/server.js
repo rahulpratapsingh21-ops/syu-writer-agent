@@ -29,11 +29,9 @@ app.post('/api/connect', route(async (req) => {
 }));
 app.post('/api/preview', route(async (req) => {
   const rows = (await readRows(req.body.sheetId, req.body.gid, req.body.start, req.body.end || null)).map((r) => ({ ...r, tab: req.body.name }));
-  // Three rows at a time (each reads a doc and the CMS), keeping the sheet order.
-  const out = new Array(rows.length);
-  let next = 0;
-  const worker = async () => { while (next < rows.length) { const i = next++; out[i] = await prepare(rows[i], { allowOtherEntity: !!req.body.allowOtherEntity }); } };
-  await Promise.all([worker(), worker(), worker()]);
+  // One row at a time (each reads a doc and the CMS) — the least memory, which matters on a busy PC.
+  const out = [];
+  for (const r of rows) out.push(await prepare(r, { allowOtherEntity: !!req.body.allowOtherEntity }));
   return out;
 }));
 app.post('/api/preview-manual', route((req) => prepare({ row: 1, manual: true, ...req.body }, { allowOtherEntity: !!req.body.allowOtherEntity })));
