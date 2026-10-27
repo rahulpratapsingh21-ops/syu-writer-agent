@@ -102,10 +102,11 @@ export function makeH1(category, page, entity) {
   const now = new Date();
   const y = now.getFullYear() + (now.getMonth() >= 8 ? 1 : 0); // from September the next admission cycle is meant
   const yy = `${y}-${String(y + 1).slice(-2)}`;
-  // "Muna College of Education - [MCE] ,Cuddalore ,Tamil Nadu" → "Muna College of Education, Cuddalore"
-  const [rawName, city] = String(entity || '').split(/\s*,\s*/);
-  const name = rawName.replace(/\s*-?\s*\[[^\]]+\]\s*/g, ' ').replace(/\s+/g, ' ').trim();
-  const acronym = (s) => s.match(/\[([^\]]+)\]/)?.[1];
+  // "Muna College of Education - [MCE] ,Cuddalore ,Tamil Nadu" → "Muna College of Education, Cuddalore";
+  // "Diploma in Medical Laboratory Technology (DMLT): Full Form" → name before ":", acronym DMLT.
+  const [rawName, city] = String(entity || '').split(/\s*:\s*/)[0].split(/\s*,\s*/);
+  const name = rawName.replace(/\s*-?\s*[[(][A-Z][^\])]*[\])]\s*/g, ' ').replace(/\s+/g, ' ').trim();
+  const acronym = (s) => s.match(/\[([^\]]+)\]/)?.[1] || s.match(/\(([A-Z][A-Za-z.&]{1,12})\)/)?.[1];
   const sub = page.includes(':') ? page.split(':')[0] : ''; // course / specialisation name of a sub-page
   const course = acronym(sub) || sub;
   const N = city ? `${name}, ${city}` : name;
@@ -146,13 +147,20 @@ export function makeH1(category, page, entity) {
 
 // Words that say nothing about which college/exam/course a doc is about.
 const GENERIC = new Set(['college', 'colleges', 'university', 'institute', 'school', 'education', 'medical', 'sciences', 'science', 'technology', 'management',
-  'state', 'national', 'international', 'india', 'indian', 'and', 'the', 'for', 'with', 'exam', 'test', 'course', 'bachelor', 'master', 'degree']);
-/** True when the doc text names the task's entity (any distinctive word of its name, e.g. "Muna" or "MCE"). */
+  'state', 'national', 'international', 'india', 'indian', 'and', 'the', 'for', 'with', 'exam', 'test', 'course', 'bachelor', 'master', 'degree',
+  'diploma', 'certificate', 'full', 'form', 'general']);
+/**
+ * True when the doc text names the task's entity. Names with an acronym ("[MCE]", "(DMLT)") need that acronym or the
+ * full name; others need any distinctive word of the name (e.g. "Muna").
+ */
 function mentionsEntity(name, text) {
-  const words = String(name).toLowerCase().replace(/[^a-z0-9\s]/g, ' ').split(/\s+/).filter((w) => w.length >= 3 && !GENERIC.has(w));
-  if (!words.length) return true;
-  const t = ` ${String(text).toLowerCase().replace(/<[^>]+>/g, ' ').replace(/[^a-z0-9\s]/g, ' ')} `;
-  return words.some((w) => t.includes(` ${w} `));
+  const t = ` ${String(text).toLowerCase().replace(/<[^>]+>/g, ' ').replace(/[^a-z0-9\s]/g, ' ').replace(/\s+/g, ' ')} `;
+  const base = String(name).split(/\s*:\s*/)[0].split(/\s*,\s*/)[0];
+  const acro = base.match(/\[([^\]]+)\]/)?.[1] || base.match(/\(([A-Z][A-Za-z.&]{1,12})\)/)?.[1];
+  const full = base.replace(/\s*-?\s*[[(][^\])]*[\])]\s*/g, ' ').toLowerCase().replace(/[^a-z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
+  if (acro) return t.includes(` ${acro.toLowerCase().replace(/[^a-z0-9]/g, '')} `) || t.includes(` ${full} `);
+  const words = full.split(' ').filter((w) => w.length >= 3 && !GENERIC.has(w));
+  return !words.length || words.some((w) => t.includes(` ${w} `));
 }
 
 /**

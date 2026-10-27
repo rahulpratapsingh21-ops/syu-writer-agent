@@ -300,6 +300,9 @@ const SECTION_ALIASES = {
   examCenters: /\bexam cent(er|re)s?|test cent(er|re)s?\b/i, admitCard: /\badmit card|hall ticket\b/i, preparation: /\bpreparation|tips|strategy|books\b/i,
   examPattern: /\bpattern|marking scheme\b/i, answerKeys: /\banswer keys?\b/i, cutoff: /\bcut ?-?offs?\b/i,
   counselling: /\bcounsel+ing|seat allotment|choice filling\b/i, moreInfo: /\bmore info|other details\b/i,
+  // course pages
+  specialisations: /\bspeciali[sz]ations?|branches\b/i, exams: /\bentrance exams?|exams? (accepted|required)\b/i,
+  jobsAndCareers: /\bjobs?|careers?|salary|scope\b/i,
 };
 // More specific sections win when a heading matches several (e.g. "Hostel Fee" → hostelFee, not hostel).
 const SPECIFIC = ['hostelFee', 'hostelLife', 'listOfScholarships', 'applicationProcess', 'feeStructure', 'allPrograms', 'campusHighlights', 'sportsFacilities', 'cutOff',
@@ -327,10 +330,12 @@ export async function convertSilo(docUrl, silo, { inOrder = false, selfUrl = '' 
   if (!keys.length) throw new Error('This silo page has no sections in the CMS that text can go into');
 
   const used = new Set();
-  const match = (text) => {
-    if (inOrder) return keys.find((k) => !used.has(k)) || null;
+  // Section by name; on course pages (inOrder) an H2 that names no section takes the next free one in order.
+  const match = (text, kind) => {
     const hits = keys.filter((k) => !used.has(k) && SECTION_ALIASES[k]?.test(text));
-    return hits.find((k) => SPECIFIC.includes(k)) || hits[0] || null;
+    const named = hits.find((k) => SPECIFIC.includes(k)) || hits[0] || null;
+    if (named || !inOrder || kind !== 'h2') return named;
+    return keys.find((k) => !used.has(k)) || null;
   };
 
   // Walk the doc: sections, headings inside them, and each section's FAQs.
@@ -345,7 +350,7 @@ export async function convertSilo(docUrl, silo, { inOrder = false, selfUrl = '' 
     if (faqMode && cur.faqs.length && !isLabel(b)) { cur.faqs[cur.faqs.length - 1].blocks.push(b); continue; }
     if (isLabel(b)) {
       faqMode = false; afterLabel = true;
-      const k = match(b.text);
+      const k = match(b.text, b.kind);
       if (k) { used.add(k); cur = { key: k, title: b.kind === 'h2' ? b.text : null, blocks: [], faqs: [] }; parts.push(cur); continue; }
       cur.blocks.push({ kind: b.kind === 'h2' ? 'h2' : 'h3', text: b.text }); // not a section of this page: heading inside the current one
       continue;
