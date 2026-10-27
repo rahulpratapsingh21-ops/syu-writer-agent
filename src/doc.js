@@ -1,5 +1,6 @@
 import * as cheerio from 'cheerio';
 import { findLinks, relatedBlogs } from './interlink.js';
+import { isSyuPage, syuPageAsDoc } from './source.js';
 
 // Google Doc (shared "Anyone with the link") → HTML in the exact markup the CMS editor produces.
 
@@ -38,9 +39,12 @@ function runsOf($, el, fmt) {
     const before = out.length;
     for (const c of node.children || []) walk(c, h);
     const cls = ($(node).attr('class') || '').split(/\s+/);
+    // Google Docs mark bold/italic with style classes; CMS / web HTML uses <b>/<strong>, <i>/<em>.
+    const bold = cls.some((c) => fmt.bold.has(c)) || node.name === 'b' || node.name === 'strong';
+    const italic = cls.some((c) => fmt.italic.has(c)) || node.name === 'i' || node.name === 'em';
     for (let i = before; i < out.length; i++) {
-      if (cls.some((c) => fmt.bold.has(c))) out[i].bold = true;
-      if (cls.some((c) => fmt.italic.has(c))) out[i].italic = true;
+      if (bold) out[i].bold = true;
+      if (italic) out[i].italic = true;
     }
   };
   for (const c of el.children || []) walk(c, null);
@@ -140,11 +144,15 @@ const isQuestion = (t) => Q_RE.test(t) || (/\?$/.test(t) && !A_RE.test(t) && t.l
  * { id, h1, blocks, faqAt, faqEnd, stats, warnings, autoLinks }
  */
 async function readDoc(docUrl, { selfUrl = '' } = {}) {
-  const id = docIdFrom(docUrl);
-  const tab = String(docUrl).match(/[?&#]tab=(t\.[\w-]+)/)?.[1];
-  const r = await fetch(`https://docs.google.com/document/d/${id}/export?format=html${tab ? `&tab=${tab}` : ''}`);
-  const text = await r.text();
-  if (!r.ok || !/<html/i.test(text.slice(0, 500))) throw new Error('Could not open the Google Doc. Share it as "Anyone with the link" (Viewer).');
+  let id, text;
+  if (isSyuPage(docUrl)) { id = 'syu-page'; text = await syuPageAsDoc(docUrl); } // content of an existing SYU page (tests / copying)
+  else {
+    id = docIdFrom(docUrl);
+    const tab = String(docUrl).match(/[?&#]tab=(t\.[\w-]+)/)?.[1];
+    const r = await fetch(`https://docs.google.com/document/d/${id}/export?format=html${tab ? `&tab=${tab}` : ''}`);
+    text = await r.text();
+    if (!r.ok || !/<html/i.test(text.slice(0, 500))) throw new Error('Could not open the Google Doc. Share it as "Anyone with the link" (Viewer).');
+  }
   const $ = cheerio.load(text);
   const css = $('style').text();
   const classes = (re) => new Set([...css.matchAll(/\.(c\d+)\{([^}]*)\}/g)].filter((m) => re.test(m[2])).map((m) => m[1]));
@@ -175,7 +183,7 @@ async function readDoc(docUrl, { selfUrl = '' } = {}) {
     const t = runsText(runs);
     if (!t) continue; // empty lines and image-only paragraphs (e.g. AI-detector screenshots) are dropped
     if (/^https?:\/\/\S+$/.test(t)) { stats.sourcesSkipped = (stats.sourcesSkipped || 0) + 1; continue; } // bare source links (research notes)
-    if (/^h[1-2]$/.test(tag) || /\btitle\b/.test(cls)) blocks.push({ kind: 'h2', text: t });
+    if (/^h[1-2]$/.test(tag) || /\btitle\b/.test(cls)) blocks.push({ kind: 'h2', text: t, section: $(el).attr('data-section') || null });
     else if (/^h[3-6]$/.test(tag) || /\bsubtitle\b/.test(cls)) blocks.push({ kind: 'h3', text: t });
     else blocks.push({ kind: 'p', runs, text: t });
   }
@@ -331,8 +339,11 @@ export async function convertSilo(docUrl, silo, { inOrder = false, selfUrl = '' 
   if (!keys.length) throw new Error('This silo page has no sections in the CMS that text can go into');
 
   const used = new Set();
+  // Content from an SYU page says which section each part is (data-section); then only those headings start sections.
+  const marked = blocks.some((b) => b.section);
   // Section by name; on course pages (inOrder) an H2 that names no section takes the next free one in order.
-  const match = (text, kind) => {
+  const match = (text, kind, section) => {
+    if (marked) return section && keys.includes(section) && !used.has(section) ? section : section ? keys.find((k) => !used.has(k) && SECTION_ALIASES[k]?.test(text)) || null : null;
     const hits = keys.filter((k) => !used.has(k) && SECTION_ALIASES[k]?.test(text));
     const named = hits.find((k) => SPECIFIC.includes(k)) || hits[0] || null;
     if (named || !inOrder || kind !== 'h2') return named;
@@ -351,7 +362,7 @@ export async function convertSilo(docUrl, silo, { inOrder = false, selfUrl = '' 
     if (faqMode && cur.faqs.length && !isLabel(b)) { cur.faqs[cur.faqs.length - 1].blocks.push(b); continue; }
     if (isLabel(b)) {
       faqMode = false; afterLabel = true;
-      const k = match(b.text, b.kind);
+      const k = match(b.text, b.kind, b.section);
       if (k) { used.add(k); cur = { key: k, title: b.kind === 'h2' ? b.text : null, blocks: [], faqs: [] }; parts.push(cur); continue; }
       cur.blocks.push({ kind: b.kind === 'h2' ? 'h2' : 'h3', text: b.text }); // not a section of this page: heading inside the current one
       continue;
