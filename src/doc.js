@@ -202,7 +202,8 @@ async function readDoc(docUrl, { selfUrl = '' } = {}) {
   for (const b of blocks) if (b.runs) for (const x of b.runs) if (x.href) { stats.links++; if (/selectyouruniversity\.com/.test(x.href)) stats.internalLinks++; }
   stats.autoLinks = autoLinks.length;
   if (faqAt < 0) warnings.push('No FAQ section found (a heading with "FAQs")');
-  return { id, h1, blocks, faqAt, faqEnd, stats, warnings, autoLinks };
+  const docText = [h1, ...blocks.map((b) => (b.kind === 'list' ? b.items.map(runsText).join(' ') : b.text || ''))].join(' ');
+  return { id, h1, blocks, faqAt, faqEnd, stats, warnings, autoLinks, docText };
 }
 
 /** Link the first plain-text occurrence of phrase inside one run (split the run around it). */
@@ -323,7 +324,7 @@ const isQ = (b) => b.kind !== 'list' && b.kind !== 'table' && /\?\s*$/.test(b.te
  * inOrder = true (course pages): each section line / H2 fills the next section in order, whatever its name.
  */
 export async function convertSilo(docUrl, silo, { inOrder = false, selfUrl = '' } = {}) {
-  const { id, h1, blocks, stats, warnings: readWarnings, autoLinks } = await readDoc(docUrl, { selfUrl });
+  const { id, h1, blocks, stats, warnings: readWarnings, autoLinks, docText } = await readDoc(docUrl, { selfUrl });
   const warnings = readWarnings.filter((w) => !/^No FAQ section found|^No Title line/.test(w));
   const out = structuredClone(silo || {});
   const keys = Object.keys(out).filter((k) => isSection(out[k]));
@@ -396,7 +397,7 @@ export async function convertSilo(docUrl, silo, { inOrder = false, selfUrl = '' 
   const preview = filled.map((p) => heading(2, out[p.key].sectionDisplayTitle) + out[p.key].content.html
     + (out[p.key].faqsContent?.faqs?.length && p.faqs.length ? heading(3, `${out[p.key].sectionDisplayTitle} — FAQs`) + faqPreview(out[p.key].faqsContent.faqs) : '')).join('')
     + (pageFaqs.length ? heading(2, 'FAQs') + faqPreview(pageFaqs) : '');
-  return { docId: id, h1, silo: out, sections, untouched, preview, stats, warnings, autoLinks };
+  return { docId: id, h1, silo: out, sections, untouched, preview, stats, warnings, autoLinks, docText };
 }
 
 /** FAQ: "Q. question" as bold h3, "Ans." in bold before the answer, an empty line between questions. */

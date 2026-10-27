@@ -210,7 +210,7 @@ export async function prepare(row, opts = {}) {
       Object.assign(item, { html: doc.preview, sections: doc.sections, untouched: doc.untouched, stats: doc.stats, autoLinks: doc.autoLinks });
       item.warnings.push(...doc.warnings);
       if (!doc.sections.length) item.errors.push('No section of this page was found in the doc');
-      if (!mentionsEntity(entity, doc.preview)) (opts.allowOtherEntity ? item.warnings : item.errors).push(`The doc never mentions "${entity}" — it looks like it is about a different ${found.category.slice(0, -1)}. Check the Doc URL.`);
+      if (!mentionsEntity(entity, doc.docText)) (opts.allowOtherEntity ? item.warnings : item.errors).push(`The doc never mentions "${entity}" — it looks like it is about a different ${found.category.slice(0, -1)}. Check the Doc URL.`);
     }
   } catch (e) { item.errors.push(e.message); }
   // An H1 typed in the dashboard wins over the doc / the agent's own.
