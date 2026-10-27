@@ -1,0 +1,177 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SYU Writer Agent</title>
+<style>
+  :root { --bg:#f6f7f9; --card:#fff; --text:#1b1f24; --muted:#667085; --line:#e4e7ec; --pass:#12805c; --pass-bg:#e7f6ef; --warn:#a15c00; --warn-bg:#fff4e0; --fail:#c0352b; --fail-bg:#fdecea; --accent:#d6246e; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#121417; --card:#1b1e23; --text:#e8eaed; --muted:#98a2b3; --line:#2c3138; --pass:#4cc38a; --pass-bg:#16301f; --warn:#f0b54a; --warn-bg:#352a12; --fail:#f2766b; --fail-bg:#3a1c1a; --accent:#f05a9a; } }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:15px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif; }
+  main { max-width:1200px; margin:0 auto; padding:20px 16px 60px; }
+  h1 { font-size:22px; margin:0; }
+  .brand { display:flex; flex-wrap:wrap; align-items:center; gap:10px 18px; margin-bottom:14px; }
+  .brand img { height:44px; width:auto; display:block; }
+  .brand h1 { padding-left:18px; border-left:1px solid var(--line); }
+  @media (prefers-color-scheme: dark) { .brand img { background:#fff; border-radius:8px; padding:4px 8px; box-sizing:content-box; } }
+  .acct { margin-left:auto; text-align:right; font-size:13px; background:var(--card); border:1px solid var(--line); border-radius:10px; padding:8px 12px; }
+  .acct a { color:var(--accent); font-weight:600; text-decoration:none; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:14px; margin-bottom:12px; }
+  .row { display:flex; flex-wrap:wrap; gap:10px; align-items:end; }
+  label { display:flex; flex-direction:column; gap:3px; font-size:13px; color:var(--muted); }
+  input, select { font:inherit; font-size:14px; color:var(--text); background:var(--bg); border:1px solid var(--line); border-radius:6px; padding:7px 8px; }
+  button { background:var(--accent); color:#fff; border:0; border-radius:8px; padding:9px 16px; font-size:14px; font-weight:600; cursor:pointer; }
+  button.secondary { background:transparent; color:var(--text); border:1px solid var(--line); }
+  button.small { padding:4px 10px; font-size:13px; }
+  button:disabled { opacity:.5; cursor:wait; }
+  .pill { font-size:12px; font-weight:700; padding:3px 9px; border-radius:99px; white-space:nowrap; }
+  .pass { color:var(--pass); background:var(--pass-bg); } .warn { color:var(--warn); background:var(--warn-bg); } .fail { color:var(--fail); background:var(--fail-bg); }
+  .step { display:flex; gap:8px; align-items:center; margin-bottom:10px; }
+  .step .num { width:24px; height:24px; border-radius:50%; background:var(--accent); color:#fff; display:inline-flex; align-items:center; justify-content:center; font-size:13px; font-weight:700; }
+  .muted { color:var(--muted); }
+  .msg { font-size:13px; margin:3px 0; } .msg.err { color:var(--fail); } .msg.wrn { color:var(--warn); }
+  .bar { position:sticky; top:0; z-index:2; background:var(--card); border:1px solid var(--accent); border-radius:10px; padding:10px 14px; margin-bottom:12px; display:flex; gap:14px; align-items:center; flex-wrap:wrap; }
+  .opt { flex-direction:row; align-items:center; gap:6px; color:var(--text); font-size:14px; cursor:pointer; }
+  .opt input { width:17px; height:17px; }
+  .item-head { display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin-bottom:6px; }
+  .item-head b { font-size:16px; }
+  .card.skipped { opacity:.5; }
+  .grid { display:grid; grid-template-columns:300px minmax(0,1fr); gap:14px; align-items:start; margin-top:8px; }
+  .grid img { width:100%; border-radius:8px; border:1px solid var(--line); display:block; }
+  .h1 { font-size:17px; font-weight:700; margin:0 0 4px; }
+  .chips { display:flex; flex-wrap:wrap; gap:6px; margin:6px 0; }
+  .chip { font-size:12px; background:var(--bg); border:1px solid var(--line); border-radius:99px; padding:2px 9px; }
+  iframe { width:100%; height:520px; border:1px solid var(--line); border-radius:8px; background:#fff; margin-top:8px; }
+  .result { margin-top:8px; font-size:14px; }
+  @media (max-width:760px) { .grid { grid-template-columns:1fr; } .brand h1 { padding-left:0; border-left:0; font-size:19px; } .acct { margin-left:0; width:100%; text-align:left; } }
+</style>
+</head>
+<body>
+<main>
+  <header class="brand"><img src="logo.png" alt="Select Your University" width="175" height="55"><h1>SYU Writer Agent - SYUW1 <span class="pill warn" style="vertical-align:middle">beta 0.0</span></h1>
+    <div class="acct"><span class="muted">CMS login</span> <b id="acctEmail">…</b><br><a id="acctCms" href="#" target="_blank" rel="noopener">Open CMS ↗</a></div></header>
+
+  <div class="card">
+    <div class="step"><span class="num">1</span><b>Google Sheet</b></div>
+    <div class="row">
+      <label style="flex:1;min-width:260px">Paste the sheet link <input id="url" placeholder="https://docs.google.com/spreadsheets/d/…/edit#gid=…"></label>
+      <button id="connect">Connect</button>
+    </div>
+    <div class="muted" id="sheetName" style="margin-top:6px"></div>
+  </div>
+
+  <div class="card" id="step2" hidden>
+    <div class="step"><span class="num">2</span><b>Which rows?</b></div>
+    <div class="row">
+      <label>Tab <select id="tab"></select></label>
+      <label>Start from row <input id="start" type="number" min="2" style="width:100px" placeholder="e.g. 2"></label>
+      <label>To row (optional) <input id="end" type="number" min="2" style="width:100px" placeholder="till end"></label>
+      <button id="preview">Preview</button>
+      <span class="muted" id="status"></span>
+    </div>
+    <div class="muted" style="margin-top:8px;font-size:13px">Each row needs a <b>Task ID</b>, <b>Doc URL</b> and <b>Writer</b>. The agent opens the Google Doc, finds the task's draft in the CMS and shows what will be uploaded. Nothing is uploaded until you click <b>Upload</b>.</div>
+  </div>
+
+  <div class="bar" id="bar" hidden>
+    <label class="opt"><input type="checkbox" id="selAll"> Select all</label>
+    <label class="opt"><input type="checkbox" id="submit"> Submit for review after upload</label>
+    <button id="uploadAll">Upload</button>
+    <span class="muted" id="selInfo"></span>
+  </div>
+  <div id="items"></div>
+</main>
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;' }[c]));
+const api = async (url, body) => {
+  const r = await fetch(url, body ? { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) } : {});
+  const j = await r.json();
+  if (!r.ok) throw new Error(j.error || r.status);
+  return j;
+};
+const store = { get: (k) => { try { return localStorage.getItem(k); } catch { return null; } }, set: (k, v) => { try { localStorage.setItem(k, v); } catch {} } };
+let sheet = null, items = [], busy = false;
+
+api('api/account').then((a) => { $('acctEmail').textContent = a.email; $('acctCms').href = a.cmsUrl.replace(/\/$/, '') + '/admin'; })
+  .catch((e) => { $('acctEmail').textContent = 'not connected — ' + e.message; });
+$('url').value = store.get('wa-url') || '';
+
+$('connect').onclick = async () => {
+  $('connect').disabled = true; $('sheetName').textContent = 'Connecting…'; $('step2').hidden = true; items = []; render();
+  try {
+    sheet = await api('api/connect', { url: $('url').value });
+    store.set('wa-url', $('url').value);
+    $('sheetName').innerHTML = `✔ Connected: <b>${esc(sheet.title || 'Google Sheet')}</b> — ${sheet.tabs.length} tab(s)`;
+    $('tab').innerHTML = sheet.tabs.map((t) => `<option value="${t.gid}">${esc(t.name)}</option>`).join('');
+    if (sheet.gid && sheet.tabs.some((t) => t.gid === sheet.gid)) $('tab').value = sheet.gid;
+    $('step2').hidden = false; $('start').focus();
+  } catch (e) { $('sheetName').innerHTML = `<span class="msg err">✖ ${esc(e.message)}</span>`; }
+  $('connect').disabled = false;
+};
+$('url').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('connect').click(); });
+
+$('preview').onclick = async () => {
+  const t = sheet.tabs.find((x) => x.gid === $('tab').value);
+  if (!$('start').value) { $('status').textContent = 'Enter the row to start from'; return $('start').focus(); }
+  $('preview').disabled = true; $('status').textContent = 'Reading the sheet, Google Docs and CMS drafts… (a few seconds per row)'; items = []; render();
+  try { items = await api('api/preview', { sheetId: sheet.sheetId, gid: t.gid, name: t.name, start: $('start').value, end: $('end').value }); $('status').textContent = `${items.length} row(s)`; }
+  catch (e) { $('status').textContent = 'Error: ' + e.message; }
+  render(); $('preview').disabled = false;
+};
+
+const isReady = (it) => !it.done && !it.errors.length;
+const selected = () => items.map((it, i) => i).filter((i) => isReady(items[i]) && !items[i].skip);
+const statLabels = { words: 'words', h2: 'sections', tables: 'tables', lists: 'lists', internalLinks: 'interlinks', ctas: 'CTAs', faqs: 'FAQs' };
+
+function render() {
+  $('items').innerHTML = items.map((it, i) => {
+    const pick = isReady(it) ? `<label class="opt" title="Untick to leave this row out"><input type="checkbox" ${it.skip ? '' : 'checked'} onchange="items[${i}].skip=!this.checked; render()"></label>` : '';
+    const pill = it.done ? `<span class="pill pass">${it.done.submitted ? 'SUBMITTED FOR REVIEW' : 'SAVED AS DRAFT'}</span>`
+      : it.errors.length ? '<span class="pill fail">CANNOT UPLOAD</span>' : `<span class="pill warn">READY · draft ${esc(it.status || '')}</span>`;
+    const msgs = it.errors.map((e) => `<div class="msg err">✖ ${esc(e)}</div>`).join('') + it.warnings.map((w) => `<div class="msg wrn">⚠ ${esc(w)}</div>`).join('');
+    const chips = it.stats ? `<div class="chips">${Object.entries(statLabels).map(([k, l]) => `<span class="chip">${it.stats[k]} ${l}</span>`).join('')}</div>` : '';
+    const body = it.h1 ? `<div class="grid"><div><img loading="lazy" src="api/hero?h1=${encodeURIComponent(it.h1)}" alt="Hero image preview"><div class="muted" style="font-size:12px;margin-top:4px">Hero image (made by the agent)</div></div>
+      <div><p class="h1">${esc(it.h1)}</p><div class="muted" style="font-size:13px">Task ${esc(it.taskId)} · subtask ${esc(it.subTaskId ?? '—')} · /blog/${esc(it.pageUrl ?? '')} · author: <b>${esc(it.writer)}</b> · date: today</div>
+      ${chips}<div style="font-size:14px">${esc(it.excerpt)}</div>
+      <div class="row" style="margin-top:8px"><button class="secondary small" onclick="togglePreview(${i})">${it.showHtml ? 'Hide' : 'Show'} content preview</button>
+      <a class="muted" href="${esc(it.docUrl)}" target="_blank" rel="noopener" style="font-size:13px">Open Google Doc ↗</a></div>
+      ${it.showHtml ? `<iframe srcdoc="${esc(previewDoc(it.html))}"></iframe>` : ''}</div></div>` : '';
+    const result = it.done ? `<div class="result"><b style="color:var(--pass)">✔ Uploaded to task ${esc(it.done.taskId)} — status: ${esc(it.done.status)}</b> · ${it.done.chars} characters · <a href="${esc(it.done.heroUrl)}" target="_blank" rel="noopener">hero image ↗</a></div>`
+      : isReady(it) ? `<div class="row" style="margin-top:10px"><button onclick="uploadOne(${i}, this)">Upload this row</button><span class="msg err" id="err${i}"></span></div>` : '';
+    return `<div class="card${it.skip && isReady(it) ? ' skipped' : ''}" id="item${i}"><div class="item-head">${pick}<b>Row ${it.row}</b>${pill}<span class="muted">${esc(it.title)}</span></div>${msgs}${body}${result}</div>`;
+  }).join('');
+  updateBar();
+}
+function updateBar() {
+  if (busy) return;
+  const ready = items.filter(isReady).length, n = selected().length;
+  $('bar').hidden = !ready;
+  $('uploadAll').textContent = `Upload selected (${n})`; $('uploadAll').disabled = !n;
+  $('selAll').checked = n === ready; $('selAll').indeterminate = n > 0 && n < ready;
+  $('selInfo').textContent = $('submit').checked ? 'Content goes to the editor for review.' : 'Saved as draft only — the editor does not get it yet.';
+}
+$('selAll').onchange = () => { items.forEach((it) => { if (isReady(it)) it.skip = !$('selAll').checked; }); render(); };
+$('submit').onchange = updateBar;
+
+/** Content preview with the site's basic look (tables full width, CTA box, FAQ gaps visible). */
+const previewDoc = (html) => `<!doctype html><meta charset="utf-8"><style>body{font:15px/1.6 system-ui,sans-serif;color:#1b1f24;margin:16px}table{width:100%;border-collapse:collapse;margin:8px 0}th,td{padding:6px;text-align:left}a{color:#d6246e}h2{font-size:20px}h3{font-size:16px}p:empty,p:has(> br:only-child){height:10px}</style>${html}`;
+function togglePreview(i) { items[i].showHtml = !items[i].showHtml; render(); }
+
+async function uploadOne(i, btn) {
+  const it = items[i];
+  if (btn) { btn.disabled = true; btn.textContent = 'Uploading…'; }
+  try { it.done = await api('api/upload', { row: it, submit: $('submit').checked }); render(); return true; }
+  catch (e) { if (btn) { btn.disabled = false; btn.textContent = 'Upload this row'; } const el = $('err' + i); if (el) el.textContent = '✖ ' + e.message; return false; }
+}
+$('uploadAll').onclick = async () => {
+  const list = selected();
+  if (!confirm(`Upload ${list.length} article(s) to the CMS${$('submit').checked ? ' and SUBMIT them for review' : ' as drafts'}?`)) return;
+  busy = true; $('uploadAll').disabled = true;
+  let n = 0;
+  for (const i of list) { $('uploadAll').textContent = `Uploading ${++n} of ${list.length}…`; await uploadOne(i, document.querySelector(`#item${i} button[onclick^="uploadOne"]`)); }
+  busy = false; updateBar();
+};
+</script>
+</body>
+</html>
