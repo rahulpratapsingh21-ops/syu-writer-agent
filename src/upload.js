@@ -87,6 +87,16 @@ const SEG = { colleges: 'college', exams: 'exam', courses: 'course' };
 /** The page's own address, so it is never interlinked to itself. */
 const selfUrlOf = ({ category, sub }) => (category === 'blogs' ? `${SITE}/blog/${sub.pageUrl}` : sub.page === 'overview' ? `${SITE}/${SEG[category]}/${sub.pageUrl}` : '');
 
+/**
+ * Page title (H1) when the doc has no Title line: the page's current title, unless that is only the silo's
+ * name ("Overview", which the CMS sets when a task starts) — then the subtask's meta title.
+ */
+function siloTitle(current, sub) {
+  const generic = !current || current.trim().toLowerCase() === siloKey(sub.page).replace(/([A-Z])/g, ' $1').trim().toLowerCase()
+    || current.trim().length < 15;
+  return generic ? sub.metaTitle || current || '' : current;
+}
+
 // Words that say nothing about which college/exam/course a doc is about.
 const GENERIC = new Set(['college', 'colleges', 'university', 'institute', 'school', 'education', 'medical', 'sciences', 'science', 'technology', 'management',
   'state', 'national', 'international', 'india', 'indian', 'and', 'the', 'for', 'with', 'exam', 'test', 'course', 'bachelor', 'master', 'degree']);
@@ -98,8 +108,11 @@ function mentionsEntity(name, text) {
   return words.some((w) => t.includes(` ${w} `));
 }
 
-/** Everything shown before uploading one sheet row. Nothing is changed in the CMS. */
-export async function prepare(row) {
+/**
+ * Everything shown before uploading one sheet row. Nothing is changed in the CMS.
+ * opts.allowOtherEntity: let a doc that never names the task's college/exam/course through (test uploads only).
+ */
+export async function prepare(row, opts = {}) {
   const item = { ...row, errors: [], warnings: [] };
   if (!row.taskId) item.errors.push('Task ID is empty');
   if (!row.docUrl) item.errors.push('Doc URL is empty');
@@ -136,12 +149,12 @@ export async function prepare(row) {
       if (!silo) throw new Error('Could not read this silo\'s sections from the CMS');
       const doc = await convertSilo(row.docUrl, silo, { inOrder: found.category === 'courses', selfUrl: selfUrlOf(found) });
       const entity = found.ver?.version.entity || found.task.title;
-      item.h1 = doc.h1 || found.ver?.version.pageDisplayTitle || '';
-      if (!doc.h1) item.warnings.push('The doc has no Title line — the page keeps its current title (H1)');
+      item.h1 = doc.h1 || siloTitle(found.ver?.version.pageDisplayTitle, found.sub);
+      if (!doc.h1) item.warnings.push(`The doc has no Title line — page title (H1): "${item.h1}"`);
       Object.assign(item, { html: doc.preview, sections: doc.sections, untouched: doc.untouched, stats: doc.stats, autoLinks: doc.autoLinks });
       item.warnings.push(...doc.warnings);
       if (!doc.sections.length) item.errors.push('No section of this page was found in the doc');
-      if (!mentionsEntity(entity, doc.preview)) item.errors.push(`The doc never mentions "${entity}" — it looks like it is about a different ${found.category.slice(0, -1)}. Check the Doc URL.`);
+      if (!mentionsEntity(entity, doc.preview)) (opts.allowOtherEntity ? item.warnings : item.errors).push(`The doc never mentions "${entity}" — it looks like it is about a different ${found.category.slice(0, -1)}. Check the Doc URL.`);
     }
   } catch (e) { item.errors.push(e.message); }
   return item;
@@ -159,8 +172,8 @@ export async function submitDraft(taskId, liveUrl) {
 }
 
 /** Upload one row: content saved as the writer's draft (blogs: plus hero image, date, author); optionally submitted. */
-export async function upload(row, { submit = false } = {}) {
-  const item = await prepare(row);
+export async function upload(row, { submit = false, allowOtherEntity = false } = {}) {
+  const item = await prepare(row, { allowOtherEntity });
   if (item.errors.length) throw new Error(item.errors.join(' · '));
   const { ver, collection, category, key, sub } = await findDraft(row.taskId, row.liveUrl, { start: true });
   const { createdAt, updatedAt, ...current } = ver.version;
@@ -178,7 +191,7 @@ export async function upload(row, { submit = false } = {}) {
   } else {
     // Convert again on the real draft (the preview may have used the published page's layout).
     const doc = await convertSilo(row.docUrl, ver.version[key], { inOrder: category === 'courses', selfUrl: selfUrlOf({ category, sub }) });
-    data = { ...current, pageDisplayTitle: doc.h1 || current.pageDisplayTitle, [key]: doc.silo };
+    data = { ...current, pageDisplayTitle: doc.h1 || siloTitle(current.pageDisplayTitle, sub), [key]: doc.silo };
     check = (v) => doc.sections.every((s) => (v[key]?.[s.key]?.content?.html || '').length >= s.chars * 0.9);
   }
   await savePage(collection, ver.parent, data, 'saveContent');
