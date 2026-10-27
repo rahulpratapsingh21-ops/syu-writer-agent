@@ -1,4 +1,5 @@
 import * as cheerio from 'cheerio';
+import { findLinks, relatedBlogs } from './interlink.js';
 
 // Google Doc (shared "Anyone with the link") → HTML in the exact markup the CMS editor produces.
 
@@ -86,10 +87,15 @@ function renderRuns(runs) {
 const para = (runs) => `<p class="editor-paragraph" dir="ltr">${renderRuns(runs)}</p>`;
 const heading = (level, text) => `<h${level} class="editor-heading-h${level}" dir="ltr"><span style="white-space: pre-wrap;">${esc(text)}</span></h${level}>`;
 
-function renderList($, el, fmt) {
+/** List block: items stay as runs (so links can still be added); html is rendered when read. */
+function listBlock($, el, fmt) {
   const tag = el.tagName === 'ol' ? 'ol' : 'ul';
-  const items = $(el).children('li').toArray().map((li, i) => `<li value="${i + 1}" class="editor-listitem">${renderRuns(runsOf($, li, fmt))}</li>`);
-  return `<${tag} class="editor-list-${tag}">${items.join('')}</${tag}>`;
+  const items = $(el).children('li').toArray().map((li) => runsOf($, li, fmt));
+  return {
+    kind: 'list', tag, items,
+    get runs() { return this.items.flat(); },
+    get html() { return `<${this.tag} class="editor-list-${this.tag}">${this.items.map((r, i) => `<li value="${i + 1}" class="editor-listitem">${renderRuns(r)}</li>`).join('')}</${this.tag}>`; },
+  };
 }
 
 function renderTable($, el, fmt) {
@@ -129,10 +135,14 @@ const A_RE = /^(a(ns(wer)?)?\s*\.?\s*\d*\s*[:.)\-–]\s*)/i;
 const isQuestion = (t) => Q_RE.test(t) || (/\?$/.test(t) && !A_RE.test(t) && t.length < 220);
 
 // ---- main ----------------------------------------------------------------------------------
-/** Fetch one Google Doc and split it into blocks: { id, h1, blocks, faqAt, faqEnd, stats, warnings } */
-async function readDoc(docUrl) {
+/**
+ * Fetch one Google Doc (only the tab in the link, if any) and split it into blocks, with SYU interlinks added:
+ * { id, h1, blocks, faqAt, faqEnd, stats, warnings, autoLinks }
+ */
+async function readDoc(docUrl, { selfUrl = '' } = {}) {
   const id = docIdFrom(docUrl);
-  const r = await fetch(`https://docs.google.com/document/d/${id}/export?format=html`);
+  const tab = String(docUrl).match(/[?&#]tab=(t\.[\w-]+)/)?.[1];
+  const r = await fetch(`https://docs.google.com/document/d/${id}/export?format=html${tab ? `&tab=${tab}` : ''}`);
   const text = await r.text();
   if (!r.ok || !/<html/i.test(text.slice(0, 500))) throw new Error('Could not open the Google Doc. Share it as "Anyone with the link" (Viewer).');
   const $ = cheerio.load(text);
@@ -160,10 +170,11 @@ async function readDoc(docUrl) {
     if (i === h1Index) continue;
     const tag = el.tagName, cls = $(el).attr('class') || '';
     if (tag === 'table') { blocks.push({ kind: 'table', html: renderTable($, el, fmt) }); stats.tables++; continue; }
-    if (tag === 'ul' || tag === 'ol') { blocks.push({ kind: 'list', html: renderList($, el, fmt), runs: $(el).children('li').toArray().flatMap((li) => runsOf($, li, fmt)) }); stats.lists++; continue; }
+    if (tag === 'ul' || tag === 'ol') { blocks.push(listBlock($, el, fmt)); stats.lists++; continue; }
     const runs = runsOf($, el, fmt);
     const t = runsText(runs);
     if (!t) continue; // empty lines and image-only paragraphs (e.g. AI-detector screenshots) are dropped
+    if (/^https?:\/\/\S+$/.test(t)) { stats.sourcesSkipped = (stats.sourcesSkipped || 0) + 1; continue; } // bare source links (research notes)
     if (/^h[1-2]$/.test(tag) || /\btitle\b/.test(cls)) blocks.push({ kind: 'h2', text: t });
     else if (/^h[3-6]$/.test(tag) || /\bsubtitle\b/.test(cls)) blocks.push({ kind: 'h3', text: t });
     else blocks.push({ kind: 'p', runs, text: t });
@@ -172,16 +183,53 @@ async function readDoc(docUrl) {
   // FAQ section = from a heading containing "FAQ" / "Frequently asked" to the next h2 (or the end).
   const faqAt = blocks.findIndex((b) => /^h[23]$/.test(b.kind) && /\bfaqs?\b|frequently asked/i.test(b.text));
   const faqEnd = faqAt < 0 ? -1 : (() => { const n = blocks.findIndex((b, i) => i > faqAt && b.kind === 'h2'); return n < 0 ? blocks.length : n; })();
-  for (const b of blocks) if (b.runs) for (const x of b.runs) if (x.href) { stats.links++; if (/selectyouruniversity\.com/.test(x.href)) stats.internalLinks++; }
   stats.words = $('body').text().split(/\s+/).filter(Boolean).length;
   if (stats.imagesSkipped) warnings.push(`${stats.imagesSkipped} image(s) in the doc were not uploaded (e.g. AI-detector screenshot)`);
+  if (stats.sourcesSkipped) warnings.push(`${stats.sourcesSkipped} bare source link line(s) were not uploaded (research notes)`);
+
+  // Interlinks: link the first mention of SYU exams / colleges / courses (normal text only, not headings or questions).
+  // (Short all-lowercase lines are writers' keyword notes, which are not uploaded.)
+  const linkable = blocks.filter((b) => (b.kind === 'p' && !/\?$/.test(b.text) && !(b.text === b.text.toLowerCase() && b.text.split(/\s+/).length <= 8)) || b.kind === 'list');
+  const existing = blocks.flatMap((b) => (b.runs || []).filter((x) => x.href).map((x) => x.href));
+  const plain = linkable.map((b) => (b.kind === 'list' ? b.items.map(runsText).join('\n') : b.text)).join('\n');
+  const autoLinks = [];
+  try {
+    for (const l of await findLinks(plain, { skipUrls: [...existing, selfUrl].filter(Boolean) })) {
+      const lists = linkable.flatMap((b) => (b.kind === 'list' ? b.items : [b.runs]));
+      if (lists.some((runs) => linkFirst(runs, l.text, l.url))) autoLinks.push(l);
+    }
+  } catch (e) { warnings.push(`Interlinks could not be added: ${e.message}`); }
+  for (const b of blocks) if (b.runs) for (const x of b.runs) if (x.href) { stats.links++; if (/selectyouruniversity\.com/.test(x.href)) stats.internalLinks++; }
+  stats.autoLinks = autoLinks.length;
   if (faqAt < 0) warnings.push('No FAQ section found (a heading with "FAQs")');
-  return { id, h1, blocks, faqAt, faqEnd, stats, warnings };
+  return { id, h1, blocks, faqAt, faqEnd, stats, warnings, autoLinks };
 }
 
+/** Link the first plain-text occurrence of phrase inside one run (split the run around it). */
+function linkFirst(runs, phrase, url) {
+  const re = new RegExp(`(?<![\\w-])${phrase.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![\\w-])`);
+  for (let i = 0; i < runs.length; i++) {
+    const r = runs[i];
+    if (r.href) continue;
+    const m = re.exec(r.text);
+    if (!m) continue;
+    const parts = [];
+    if (m.index) parts.push({ ...r, text: r.text.slice(0, m.index) });
+    parts.push({ ...r, text: m[0], href: url });
+    if (m.index + m[0].length < r.text.length) parts.push({ ...r, text: r.text.slice(m.index + m[0].length) });
+    runs.splice(i, 1, ...parts);
+    return true;
+  }
+  return false;
+}
+
+/** "Don't Miss:" box like the SYU blogs: a bold label and a list of bold links to related blogs. */
+const dontMiss = (links) => `<p class="editor-paragraph" dir="ltr"><b><strong class="editor-text-bold" style="white-space: pre-wrap;">Don't Miss:</strong></b></p><ul class="editor-list-ul">${links
+  .map((l, i) => `<li value="${i + 1}" class="editor-listitem"><a href="${esc(l.url)}" rel="noreferrer" class="editor-link"><b><strong class="editor-text-bold" style="white-space: pre-wrap;">${esc(l.text)}</strong></b></a></li>`).join('')}</ul>`;
+
 /** Blog: fetch and convert one Google Doc into one HTML body: { h1, html, excerpt, stats, warnings } */
-export async function convertDoc(docUrl) {
-  const { id, h1, blocks, faqAt, faqEnd, stats, warnings } = await readDoc(docUrl);
+export async function convertDoc(docUrl, { selfUrl = '', title = '' } = {}) {
+  const { id, h1, blocks, faqAt, faqEnd, stats, warnings, autoLinks } = await readDoc(docUrl, { selfUrl });
 
   // CTAs: one before the 3rd section heading (2nd if the article is short), one before the FAQ (or at the end).
   const topic = [h1, ...blocks.filter((b) => b.kind === 'h2').map((b) => b.text)].join(' ');
@@ -190,8 +238,15 @@ export async function convertDoc(docUrl) {
   const cta1At = h2s.length >= 3 ? h2s[2] : h2s.length === 2 ? h2s[1] : -1;
   const cta2At = faqAt >= 0 ? faqAt : blocks.length;
 
+  // "Don't Miss:" related blogs, before the last section ahead of the FAQ (not right next to a CTA).
+  const existing = new Set(blocks.flatMap((b) => (b.runs || []).filter((x) => x.href).map((x) => x.href.replace(/\/$/, ''))));
+  const related = await relatedBlogs(h1 || title, { skipUrls: [...existing, selfUrl] }).catch(() => []);
+  const dmAt = [...h2s].reverse().find((i) => i !== cta1At && i !== h2s[0]) ?? cta2At;
+  stats.relatedBlogs = related.length;
+
   let html = '', firstPara = '';
   for (let i = 0; i <= blocks.length; i++) {
+    if (i === dmAt && related.length) html += dontMiss(related) + EMPTY_P;
     if (i === cta1At) { html += ctaBlock(cta1); stats.ctas++; }
     if (i === cta2At && cta2At !== cta1At) { html += ctaBlock(cta2); stats.ctas++; }
     const b = blocks[i];
@@ -203,7 +258,7 @@ export async function convertDoc(docUrl) {
     else html += b.html;
     if (i === faqAt) html += renderFaq(blocks.slice(faqAt + 1, faqEnd), stats, warnings);
   }
-  return { docId: id, h1, html, excerpt: excerptOf(firstPara), stats, warnings };
+  return { docId: id, h1, html, excerpt: excerptOf(firstPara), stats, warnings, autoLinks, related };
 }
 
 /** Render a run of blocks (no FAQ handling) as editor HTML. */
@@ -223,19 +278,20 @@ function faqItems(blocks) {
 }
 
 // ---- silo pages (college / exam / course) ---------------------------------------------------
-// A silo page is a set of named sections ({ sectionDisplayTitle, showOnWebsite, content: { html } }) plus an FAQ list.
-// Each doc H2 that names a section starts that section; its text becomes the section heading.
-// Other H2s stay inside the current section as headings. Text before the first matched H2 goes to the first section.
+// A silo page is a set of named sections ({ sectionDisplayTitle, showOnWebsite, content: { html }, faqsContent? })
+// plus, on some pages, a page-level FAQ list. In the writers' docs a section starts with a short plain line
+// ("Overview", "Courses and Fees", "Admission") or an H2 naming it. Other short lines and H2s become headings inside
+// the current section. Each section can have its own FAQ ("FAQs (5)" followed by questions).
 const SECTION_ALIASES = {
   overview: /\b(overview|about|introduction|highlights?)\b/i, summary: /\bsummary\b/i,
-  programs: /\b(programs?|programmes?|courses?)\b/i, allPrograms: /\b(courses? offered|programs?|programmes?|all courses)\b/i,
-  feeStructure: /\bfees?( structure)?\b/i, fees: /\bfees?\b|\bcost\b/i, eligibility: /\beligib/i,
-  admissions: /\badmissions?\b/i, applicationProcess: /\bapplication|how to apply\b/i, cutOff: /\bcut ?-?offs?\b/i,
+  programs: /\b(courses? (and|&) fees?|programs?|programmes?|courses offered)\b/i, allPrograms: /\b(courses? offered|programs?|programmes?|all courses)\b/i,
+  feeStructure: /\bfees? structure|fees?\b/i, fees: /\bfees?\b|\bcost\b/i, eligibility: /\beligib/i,
+  admissions: /\badmissions?\b/i, applicationProcess: /\bapplication process|how to apply\b/i, cutOff: /\bcut ?-?offs?\b/i,
   curriculum: /\b(curriculum|syllabus|subjects)\b/i, scholarship: /\bscholarships?\b/i, scholarships: /\bscholarships?\b/i,
   scholarshipAndFunding: /\b(scholarships?|funding)\b/i, listOfScholarships: /\b(list of scholarships|scholarships offered|types of scholarships)\b/i,
-  placements: /\bplacements?|recruiters?|packages?\b/i, faculty: /\bfaculty|teachers?|professors?\b/i,
-  infrastructure: /\binfrastructure|campus|facilities\b/i, campusHighlights: /\bcampus\b/i, hostel: /\bhostels?\b/i,
-  hostelFee: /\bhostel fees?|hostel cost|accommodation (fee|cost)\b/i, hostelLife: /\bhostel life|student life\b/i,
+  placements: /\bplacements?|recruiters?\b/i, faculty: /\bfaculty|teachers?|professors?\b/i,
+  infrastructure: /\binfrastructure|campus|facilities\b/i, campusHighlights: /\bcampus highlights?\b/i, hostel: /\bhostels?|dormitor(y|ies)\b/i,
+  hostelFee: /\bhostel fees?|hostel cost|dormitory fees?|accommodation (fee|cost)\b/i, hostelLife: /\bhostel life|student life\b/i,
   library: /\blibrary\b/i, sportsFacilities: /\bsports?\b/i,
   // exam pages
   whatIsNew: /\bwhat'?s new|latest (updates?|news)\b/i, examDetails: /\bexam (details|highlights|pattern)\b/i,
@@ -243,7 +299,7 @@ const SECTION_ALIASES = {
   questionPapers: /\b(question papers?|previous year|sample papers?|pyqs?)\b/i, pastQuestionPapers: /\b(question papers?|previous year|sample papers?|pyqs?)\b/i,
   examCenters: /\bexam cent(er|re)s?|test cent(er|re)s?\b/i, admitCard: /\badmit card|hall ticket\b/i, preparation: /\bpreparation|tips|strategy|books\b/i,
   examPattern: /\bpattern|marking scheme\b/i, answerKeys: /\banswer keys?\b/i, cutoff: /\bcut ?-?offs?\b/i,
-  counselling: /\bcounsel+ing|seat allotment|choice filling\b/i, moreInfo: /\bmore info|other details|important\b/i,
+  counselling: /\bcounsel+ing|seat allotment|choice filling\b/i, moreInfo: /\bmore info|other details\b/i,
 };
 // More specific sections win when a heading matches several (e.g. "Hostel Fee" → hostelFee, not hostel).
 const SPECIFIC = ['hostelFee', 'hostelLife', 'listOfScholarships', 'applicationProcess', 'feeStructure', 'allPrograms', 'campusHighlights', 'sportsFacilities', 'cutOff',
@@ -252,63 +308,90 @@ const SPECIFIC = ['hostelFee', 'hostelLife', 'listOfScholarships', 'applicationP
 const isSection = (v) => v && typeof v === 'object' && !Array.isArray(v) && 'sectionDisplayTitle' in v && v.content;
 const justify = (html) => html.replace(/<p class="editor-paragraph" dir="ltr">/g, '<p class="editor-paragraph" dir="ltr" style="text-align: justify;">');
 
+// Writers' doc conventions.
+const NUM_Q = /^\s*(\d+\s*[.)]\s*|q(ues(tion)?)?\s*\.?\s*\d*\s*[:.)\-–]\s*)/i;
+const isLabel = (b) => b.kind === 'h2' || (b.kind === 'p' && b.text.length <= 60 && b.text.split(/\s+/).length <= 6 && !/[.?!,;:]$/.test(b.text) && !b.runs.some((r) => r.href));
+const isKeywordNote = (b) => b.kind === 'p' && b.text === b.text.toLowerCase() && b.text.split(/\s+/).length <= 8 && !/[.?!]$/.test(b.text);
+const isFaqLabel = (b) => b.kind !== 'list' && b.kind !== 'table' && b.text.length < 50 && /^(faqs?|frequently asked questions?)\b/i.test(b.text);
+const isQ = (b) => b.kind !== 'list' && b.kind !== 'table' && /\?\s*$/.test(b.text) && b.text.length < 250;
+
 /**
- * Silo: convert a Google Doc into the silo's sections + FAQ list, starting from the draft's current silo object.
- * inOrder = true (course pages): each doc H2 fills the next section in order, whatever its name.
+ * Silo: convert a Google Doc into the silo's sections + FAQ lists, starting from the draft's current silo object.
+ * inOrder = true (course pages): each section line / H2 fills the next section in order, whatever its name.
  */
-export async function convertSilo(docUrl, silo, { inOrder = false } = {}) {
-  const { id, h1, blocks, faqAt, faqEnd, stats, warnings } = await readDoc(docUrl);
+export async function convertSilo(docUrl, silo, { inOrder = false, selfUrl = '' } = {}) {
+  const { id, h1, blocks, stats, warnings: readWarnings, autoLinks } = await readDoc(docUrl, { selfUrl });
+  const warnings = readWarnings.filter((w) => !/^No FAQ section found|^No Title line/.test(w));
   const out = structuredClone(silo || {});
   const keys = Object.keys(out).filter((k) => isSection(out[k]));
   if (!keys.length) throw new Error('This silo page has no sections in the CMS that text can go into');
 
-  const body = blocks.filter((_, i) => faqAt < 0 || i < faqAt || i >= faqEnd);
   const used = new Set();
   const match = (text) => {
     if (inOrder) return keys.find((k) => !used.has(k)) || null;
     const hits = keys.filter((k) => !used.has(k) && SECTION_ALIASES[k]?.test(text));
     return hits.find((k) => SPECIFIC.includes(k)) || hits[0] || null;
   };
-  // Split the doc into [{ key, title, blocks }]; the intro (before the first matched H2) goes to the first section.
-  const parts = [{ key: null, title: null, blocks: [] }];
-  for (const b of body) {
-    const k = b.kind === 'h2' ? match(b.text) : null;
-    if (k) { used.add(k); parts.push({ key: k, title: b.text, blocks: [] }); } else parts[parts.length - 1].blocks.push(b);
-  }
-  if (!parts[0].blocks.length) parts.shift();
-  else if (!used.has(keys[0])) { parts[0].key = keys[0]; used.add(keys[0]); }
-  else { warnings.push('Text before the first section heading was added to the first section'); parts[1].blocks.unshift(...parts[0].blocks); parts.shift(); }
 
-  // CTAs: one after the middle section, one after the last (only when there are 3+ sections: one after the last).
-  const [cta1, cta2] = ctaTexts([h1, ...parts.map((p) => p.title || '')].join(' '));
+  // Walk the doc: sections, headings inside them, and each section's FAQs.
+  const parts = [{ key: null, title: null, blocks: [], faqs: [] }];
+  let cur = parts[0], faqMode = false, afterLabel = false;
+  stats.notesSkipped = 0;
+  for (const b of blocks) {
+    if (afterLabel && isKeywordNote(b)) { stats.notesSkipped++; continue; } // keyword notes under a section line
+    afterLabel = false;
+    if (isFaqLabel(b)) { faqMode = true; continue; }
+    if (isQ(b) && (faqMode || NUM_Q.test(b.text) || b.kind === 'h3')) { faqMode = true; cur.faqs.push({ question: b.text.replace(NUM_Q, '').trim(), blocks: [] }); continue; }
+    if (faqMode && cur.faqs.length && !isLabel(b)) { cur.faqs[cur.faqs.length - 1].blocks.push(b); continue; }
+    if (isLabel(b)) {
+      faqMode = false; afterLabel = true;
+      const k = match(b.text);
+      if (k) { used.add(k); cur = { key: k, title: b.kind === 'h2' ? b.text : null, blocks: [], faqs: [] }; parts.push(cur); continue; }
+      cur.blocks.push({ kind: b.kind === 'h2' ? 'h2' : 'h3', text: b.text }); // not a section of this page: heading inside the current one
+      continue;
+    }
+    cur.blocks.push(b);
+  }
+  if (!parts[0].blocks.length && !parts[0].faqs.length) parts.shift();
+  else if (!used.has(keys[0])) { parts[0].key = keys[0]; used.add(keys[0]); }
+  else { warnings.push('Text before the first section line was added to the first section'); parts[1].blocks.unshift(...parts[0].blocks); parts[1].faqs.unshift(...parts[0].faqs); parts.shift(); }
+  if (stats.notesSkipped) warnings.push(`${stats.notesSkipped} keyword note line(s) under section names were not uploaded`);
+
+  // CTAs: one after the middle section and one after the last (one only, after the last, if fewer than 3 sections).
+  const [cta1, cta2] = ctaTexts([h1, ...parts.map((p) => p.title || out[p.key]?.sectionDisplayTitle || '')].join(' '));
   const filled = parts.filter((p) => p.key);
   const mid = filled.length >= 3 ? filled[Math.floor((filled.length - 1) / 2)] : null;
+  const faqHtml = (f) => f.blocks.map((b) => (b.kind === 'p' ? para(A_RE.test(b.text) ? stripPrefix(b.runs, A_RE) : b.runs) : b.kind === 'h3' ? heading(3, b.text) : b.html)).join('');
+  const pageFaqs = [];
+  stats.faqs = 0; stats.h2 = 0;
   for (const p of filled) {
     let html = justify(renderBlocks(p.blocks));
     if (p === mid) { html += ctaBlock(cta1); stats.ctas++; }
     if (p === filled[filled.length - 1]) { html += ctaBlock(mid ? cta2 : cta1); stats.ctas++; }
-    out[p.key] = { ...out[p.key], ...(p.title ? { sectionDisplayTitle: p.title } : {}), showOnWebsite: true, content: { ...(out[p.key].content || {}), isExpanded: true, html } };
+    const sec = out[p.key];
+    out[p.key] = { ...sec, ...(p.title ? { sectionDisplayTitle: p.title } : {}), showOnWebsite: true, content: { ...(sec.content || {}), isExpanded: true, html } };
     stats.h2++;
-  }
-
-  // FAQ: into the page's FAQ list (or the last filled section's list); pages without one get it as text in the last section.
-  const faqs = faqAt >= 0 ? faqItems(blocks.slice(faqAt + 1, faqEnd)) : [];
-  stats.faqs = faqs.length;
-  if (faqs.length) {
-    const list = faqs.map((f) => ({ question: f.question, content: { isExpanded: true, html: justify(f.html) } }));
-    const last = filled[filled.length - 1]?.key;
-    if (out.faqsContent) out.faqsContent = { ...out.faqsContent, faqs: list };
-    else if (last && out[last].faqsContent) out[last] = { ...out[last], faqsContent: { ...out[last].faqsContent, faqs: list } };
-    else if (last) {
-      out[last].content.html += heading(2, blocks[faqAt].text) + justify(renderFaq(blocks.slice(faqAt + 1, faqEnd), { faqs: 0 }, []));
-      warnings.push('This page type has no FAQ list in the CMS — FAQs were added as text at the end of the last section');
+    // FAQs: the section's own list, else the page's list, else as text at the end of the section.
+    const list = p.faqs.map((f) => ({ question: f.question, content: { isExpanded: true, html: justify(faqHtml(f)) } })).filter((f) => f.content.html);
+    stats.faqs += list.length;
+    if (!list.length) continue;
+    if (sec.faqsContent) out[p.key].faqsContent = { ...sec.faqsContent, faqs: list };
+    else if (out.faqsContent) pageFaqs.push(...list);
+    else {
+      out[p.key].content.html += heading(2, 'FAQs') + list.map((f) => `<h3 class="editor-heading-h3" dir="ltr"><b><strong class="editor-text-bold" style="white-space: pre-wrap;">Q. ${esc(f.question)}</strong></b></h3>${f.content.html.replace(/^<p([^>]*)>/, '<p$1><b><strong class="editor-text-bold" style="white-space: pre-wrap;">Ans. </strong></b>')}${EMPTY_P}`).join('');
+      warnings.push(`${sec.sectionDisplayTitle || p.key}: this page has no FAQ list in the CMS — FAQs were added as text at the end of the section`);
     }
   }
+  if (pageFaqs.length) out.faqsContent = { ...out.faqsContent, faqs: pageFaqs };
+  if (!stats.faqs) warnings.push('No FAQs found in the doc');
+
   const untouched = keys.filter((k) => !used.has(k)).map((k) => out[k].sectionDisplayTitle || k);
-  const sections = filled.map((p) => ({ key: p.key, title: out[p.key].sectionDisplayTitle, chars: out[p.key].content.html.length }));
-  const preview = filled.map((p) => heading(2, out[p.key].sectionDisplayTitle) + out[p.key].content.html).join('')
-    + (faqs.length ? heading(2, 'FAQs') + faqs.map((f) => `<h3 class="editor-heading-h3">Q. ${esc(f.question)}</h3>${f.html}${EMPTY_P}`).join('') : '');
-  return { docId: id, h1, silo: out, sections, untouched, preview, stats, warnings };
+  const sections = filled.map((p) => ({ key: p.key, title: out[p.key].sectionDisplayTitle, chars: out[p.key].content.html.length, faqs: p.faqs.length }));
+  const faqPreview = (list) => list.map((f) => `<h3 class="editor-heading-h3">Q. ${esc(f.question)}</h3>${f.content.html}${EMPTY_P}`).join('');
+  const preview = filled.map((p) => heading(2, out[p.key].sectionDisplayTitle) + out[p.key].content.html
+    + (out[p.key].faqsContent?.faqs?.length && p.faqs.length ? heading(3, `${out[p.key].sectionDisplayTitle} — FAQs`) + faqPreview(out[p.key].faqsContent.faqs) : '')).join('')
+    + (pageFaqs.length ? heading(2, 'FAQs') + faqPreview(pageFaqs) : '');
+  return { docId: id, h1, silo: out, sections, untouched, preview, stats, warnings, autoLinks };
 }
 
 /** FAQ: "Q. question" as bold h3, "Ans." in bold before the answer, an empty line between questions. */

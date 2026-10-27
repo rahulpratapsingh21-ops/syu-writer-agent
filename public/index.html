@@ -176,7 +176,14 @@ $('preview').onclick = async () => {
 
 const isReady = (it) => !it.done && !it.errors.length;
 const selected = () => items.map((it, i) => i).filter((i) => isReady(items[i]) && !items[i].skip);
-const statLabels = { words: 'words', h2: 'sections', tables: 'tables', lists: 'lists', internalLinks: 'interlinks', ctas: 'CTAs', faqs: 'FAQs' };
+const statLabels = { words: 'words', h2: 'sections', tables: 'tables', lists: 'lists', internalLinks: 'SYU links', autoLinks: 'added by agent', relatedBlogs: '"Don\'t Miss" blogs', ctas: 'CTAs', faqs: 'FAQs' };
+const linkList = (it) => {
+  const short = (u) => u.replace('https://www.selectyouruniversity.com', '');
+  const auto = (it.autoLinks || []).map((l) => `<a href="${esc(l.url)}" target="_blank" rel="noopener">${esc(l.text)}</a> → ${esc(short(l.url))}`);
+  const rel = (it.related || []).map((l) => `<a href="${esc(l.url)}" target="_blank" rel="noopener">${esc(l.text)}</a>`);
+  return (auto.length ? `<div class="muted" style="font-size:12px">Interlinks added: ${auto.join(' · ')}</div>` : '')
+    + (rel.length ? `<div class="muted" style="font-size:12px">Don't Miss: ${rel.join(' · ')}</div>` : '');
+};
 
 function render() {
   $('items').innerHTML = items.map((it, i) => {
@@ -184,7 +191,7 @@ function render() {
     const pill = it.done ? `<span class="pill pass">${it.done.submitted ? 'SUBMITTED FOR REVIEW' : 'SAVED AS DRAFT'}</span>`
       : it.errors.length ? '<span class="pill fail">CANNOT UPLOAD</span>' : `<span class="pill warn">READY · draft ${esc(it.status || '')}</span>`;
     const msgs = it.errors.map((e) => `<div class="msg err">✖ ${esc(e)}</div>`).join('') + it.warnings.map((w) => `<div class="msg wrn">⚠ ${esc(w)}</div>`).join('');
-    const chips = it.stats ? `<div class="chips">${Object.entries(statLabels).map(([k, l]) => `<span class="chip">${it.stats[k]} ${l}</span>`).join('')}</div>` : '';
+    const chips = it.stats ? `<div class="chips">${Object.entries(statLabels).filter(([k]) => it.stats[k] !== undefined).map(([k, l]) => `<span class="chip">${it.stats[k]} ${l}</span>`).join('')}</div>${linkList(it)}` : '';
     const isSilo = it.category && it.category !== 'blogs';
     const side = isSilo
       ? `<div><b style="font-size:14px">${esc(it.silo || '')}</b> <span class="muted" style="font-size:12px">(${esc((it.category || '').slice(0, -1))} silo)</span>

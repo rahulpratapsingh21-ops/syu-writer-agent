@@ -67,13 +67,36 @@ async function findDraft(taskId, liveUrl, { start = false } = {}) {
   return { ...base, ver };
 }
 
-/** Section layout to preview a silo whose task is not started yet: the published page of the same silo. */
+/**
+ * Section layout to preview a silo whose task is not started yet: the published page of the same silo,
+ * or (a new page) the same silo type of another entity with its text emptied.
+ */
 async function siloTemplate({ task, sub, collection, key }) {
-  const p = (await cmsGet(`/${collection}?${qs({ 'where[dataRef.value][equals]': task.entity?.value, 'where[page][equals]': sub.page, limit: 1, depth: 0 })}`)).docs[0];
-  return p?.[key] || null;
+  const own = (await cmsGet(`/${collection}?${qs({ 'where[dataRef.value][equals]': task.entity?.value, 'where[page][equals]': sub.page, limit: 1, depth: 0 })}`)).docs[0];
+  if (own?.[key]) return own[key];
+  const where = sub.page.includes(':') ? { 'where[page][like]': `:${key}` } : { 'where[page][equals]': sub.page };
+  const other = (await cmsGet(`/${collection}?${qs({ ...where, limit: 1, depth: 0, sort: '-updatedAt' })}`)).docs[0]?.[key];
+  if (!other) return null;
+  const blank = (v) => (Array.isArray(v) ? [] : v && typeof v === 'object' ? Object.fromEntries(Object.entries(v).map(([k, x]) => [k, k === 'html' ? '' : k === 'id' ? undefined : blank(x)])) : v);
+  return blank(other);
 }
 
 const GENERIC_WRITER = /^content\s*writer$/i;
+const SITE = 'https://www.selectyouruniversity.com';
+const SEG = { colleges: 'college', exams: 'exam', courses: 'course' };
+/** The page's own address, so it is never interlinked to itself. */
+const selfUrlOf = ({ category, sub }) => (category === 'blogs' ? `${SITE}/blog/${sub.pageUrl}` : sub.page === 'overview' ? `${SITE}/${SEG[category]}/${sub.pageUrl}` : '');
+
+// Words that say nothing about which college/exam/course a doc is about.
+const GENERIC = new Set(['college', 'colleges', 'university', 'institute', 'school', 'education', 'medical', 'sciences', 'science', 'technology', 'management',
+  'state', 'national', 'international', 'india', 'indian', 'and', 'the', 'for', 'with', 'exam', 'test', 'course', 'bachelor', 'master', 'degree']);
+/** True when the doc text names the task's entity (any distinctive word of its name, e.g. "Muna" or "MCE"). */
+function mentionsEntity(name, text) {
+  const words = String(name).toLowerCase().replace(/[^a-z0-9\s]/g, ' ').split(/\s+/).filter((w) => w.length >= 3 && !GENERIC.has(w));
+  if (!words.length) return true;
+  const t = ` ${String(text).toLowerCase().replace(/<[^>]+>/g, ' ').replace(/[^a-z0-9\s]/g, ' ')} `;
+  return words.some((w) => t.includes(` ${w} `));
+}
 
 /** Everything shown before uploading one sheet row. Nothing is changed in the CMS. */
 export async function prepare(row) {
@@ -104,18 +127,21 @@ export async function prepare(row) {
 
   try {
     if (!found || found.category === 'blogs') {
-      const doc = await convertDoc(row.docUrl);
+      const doc = await convertDoc(row.docUrl, { selfUrl: found ? selfUrlOf(found) : '', title: row.title });
       item.h1 = doc.h1 || row.title;
-      Object.assign(item, { html: doc.html, excerpt: doc.excerpt, stats: doc.stats, heroText: heroText(item.h1) });
+      Object.assign(item, { html: doc.html, excerpt: doc.excerpt, stats: doc.stats, heroText: heroText(item.h1), autoLinks: doc.autoLinks, related: doc.related });
       item.warnings.push(...doc.warnings);
     } else {
       const silo = found.ver ? found.ver.version[found.key] : await siloTemplate(found);
       if (!silo) throw new Error('Could not read this silo\'s sections from the CMS');
-      const doc = await convertSilo(row.docUrl, silo, { inOrder: found.category === 'courses' });
-      item.h1 = doc.h1 || row.title;
-      Object.assign(item, { html: doc.preview, sections: doc.sections, untouched: doc.untouched, stats: doc.stats });
+      const doc = await convertSilo(row.docUrl, silo, { inOrder: found.category === 'courses', selfUrl: selfUrlOf(found) });
+      const entity = found.ver?.version.entity || found.task.title;
+      item.h1 = doc.h1 || found.ver?.version.pageDisplayTitle || '';
+      if (!doc.h1) item.warnings.push('The doc has no Title line — the page keeps its current title (H1)');
+      Object.assign(item, { html: doc.preview, sections: doc.sections, untouched: doc.untouched, stats: doc.stats, autoLinks: doc.autoLinks });
       item.warnings.push(...doc.warnings);
-      if (!doc.sections.length) item.errors.push('No doc heading matched a section of this page');
+      if (!doc.sections.length) item.errors.push('No section of this page was found in the doc');
+      if (!mentionsEntity(entity, doc.preview)) item.errors.push(`The doc never mentions "${entity}" — it looks like it is about a different ${found.category.slice(0, -1)}. Check the Doc URL.`);
     }
   } catch (e) { item.errors.push(e.message); }
   return item;
@@ -136,7 +162,7 @@ export async function submitDraft(taskId, liveUrl) {
 export async function upload(row, { submit = false } = {}) {
   const item = await prepare(row);
   if (item.errors.length) throw new Error(item.errors.join(' · '));
-  const { ver, collection, category, key } = await findDraft(row.taskId, row.liveUrl, { start: true });
+  const { ver, collection, category, key, sub } = await findDraft(row.taskId, row.liveUrl, { start: true });
   const { createdAt, updatedAt, ...current } = ver.version;
   let data, heroUrl = '', check;
 
@@ -151,8 +177,8 @@ export async function upload(row, { submit = false } = {}) {
     check = (v) => (v.html || '').length >= item.html.length * 0.9 && v.title === item.h1;
   } else {
     // Convert again on the real draft (the preview may have used the published page's layout).
-    const doc = await convertSilo(row.docUrl, ver.version[key], { inOrder: category === 'courses' });
-    data = { ...current, pageDisplayTitle: doc.h1 || item.h1, [key]: doc.silo };
+    const doc = await convertSilo(row.docUrl, ver.version[key], { inOrder: category === 'courses', selfUrl: selfUrlOf({ category, sub }) });
+    data = { ...current, pageDisplayTitle: doc.h1 || current.pageDisplayTitle, [key]: doc.silo };
     check = (v) => doc.sections.every((s) => (v[key]?.[s.key]?.content?.html || '').length >= s.chars * 0.9);
   }
   await savePage(collection, ver.parent, data, 'saveContent');
