@@ -177,11 +177,16 @@ $('url').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('connect'
 $('preview').onclick = async () => {
   const t = sheet.tabs.find((x) => x.gid === $('tab').value);
   if (!$('start').value) { $('status').textContent = 'Enter the row to start from'; return $('start').focus(); }
-  $('preview').disabled = true; $('status').textContent = 'Reading the sheet, Google Docs and CMS drafts… (a few seconds per row)'; items = []; render();
+  $('preview').disabled = true; items = []; render();
+  const t0 = Date.now();
+  const tick = setInterval(() => { $('status').textContent = `⏳ Reading the sheet, Google Docs and CMS drafts… ${Math.round((Date.now() - t0) / 1000)}s (about 10 seconds per row)`; }, 1000);
   testMode = $('sTest').checked;
-  try { items = await api('api/preview', { sheetId: sheet.sheetId, gid: t.gid, name: t.name, start: $('start').value, end: $('end').value, allowOtherEntity: testMode }); $('status').textContent = `${items.length} row(s)`; }
-  catch (e) { $('status').textContent = 'Error: ' + e.message; }
-  render(); $('preview').disabled = false;
+  try {
+    items = await api('api/preview', { sheetId: sheet.sheetId, gid: t.gid, name: t.name, start: $('start').value, end: $('end').value, allowOtherEntity: testMode });
+    const ready = items.filter(isReady).length;
+    $('status').textContent = `✔ ${items.length} row(s) read in ${Math.round((Date.now() - t0) / 1000)}s — ${ready} ready to upload${ready < items.length ? `, ${items.length - ready} cannot be uploaded (see the red message on each)` : ''}`;
+  } catch (e) { $('status').textContent = '✖ Error: ' + e.message; }
+  clearInterval(tick); render(); $('preview').disabled = false;
 };
 
 const isReady = (it) => !it.done && !it.errors.length;
