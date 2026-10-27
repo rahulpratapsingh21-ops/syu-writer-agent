@@ -2,7 +2,7 @@ import 'dotenv/config';
 import express from 'express';
 import { fileURLToPath } from 'node:url';
 import { parseSheetUrl, connectSheet, readRows } from './sheets.js';
-import { prepare, upload } from './upload.js';
+import { prepare, upload, submitDraft } from './upload.js';
 import { makeHero } from './hero.js';
 import { getMe, cmsUrl } from './cms.js';
 
@@ -39,6 +39,11 @@ app.get('/api/hero', async (req, res) => {
 app.post('/api/upload', route(async (req) => {
   const r = await upload(req.body.row, { submit: !!req.body.submit });
   console.log(`[upload] row ${r.row} → task ${r.taskId}: ${r.status}${r.submitted ? ' (submitted)' : ''}`);
+  return r;
+}));
+app.post('/api/submit', route(async (req) => {
+  const r = await submitDraft(req.body.taskId);
+  console.log(`[submit] task ${r.taskId}: ${r.status}`);
   return r;
 }));
 app.use(express.static(fileURLToPath(new URL('../public', import.meta.url))));

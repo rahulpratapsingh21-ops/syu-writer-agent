@@ -9,8 +9,8 @@ const PAGES = {
   exams: { collection: 'examPages', versions: '_examPages_versions' },
   courses: { collection: 'coursePages', versions: '_coursePages_versions' },
 };
-// Draft states a writer may still change; anything later (in review, approved, published) is left alone.
-const EDITABLE = ['draft', 'submitted', 'reOpenedForCW', 'rejected'];
+// Draft states a writer may still change; submitted (with the editor), approved or published is left alone.
+const EDITABLE = ['draft', 'reOpenedForCW', 'rejected'];
 const HAS_CONTENT = 200; // html longer than this = the draft already has content
 
 /** Today at midnight India time, as the CMS date picker stores it (e.g. 2026-10-26T18:30:00.000Z for 27 Oct). */
@@ -81,6 +81,17 @@ async function withDoc(item, row) {
     item.warnings.push(...doc.warnings);
   } catch (e) { item.errors.push(e.message); }
   return item;
+}
+
+/** Submit an already-uploaded draft for review (the writer's "Submit" button). */
+export async function submitDraft(taskId) {
+  const { ver, collection } = await findDraft(taskId);
+  if (!EDITABLE.includes(ver.version.status)) throw new Error(`Draft is "${ver.version.status}" — already with the editor`);
+  if ((ver.version.html || '').length <= HAS_CONTENT) throw new Error('This draft has no content yet — upload it first');
+  const { createdAt, updatedAt, ...data } = ver.version;
+  await savePage(collection, ver.parent, data, 'submitContentForCW');
+  const { task, ver: after } = await findDraft(taskId);
+  return { taskId, status: after.version.status, taskStatus: task.status, submitted: true };
 }
 
 /** Upload one row: hero image, then content saved as the writer's draft; optionally submitted for review. */

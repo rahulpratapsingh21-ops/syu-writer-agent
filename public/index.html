@@ -75,7 +75,7 @@
 
   <div class="bar" id="bar" hidden>
     <label class="opt"><input type="checkbox" id="selAll"> Select all</label>
-    <label class="opt"><input type="checkbox" id="submit"> Submit for review after upload</label>
+    <label class="opt"><input type="checkbox" id="submit" checked> Submit for review after upload</label>
     <button id="uploadAll">Upload</button>
     <span class="muted" id="selInfo"></span>
   </div>
@@ -137,8 +137,12 @@ function render() {
       <div class="row" style="margin-top:8px"><button class="secondary small" onclick="togglePreview(${i})">${it.showHtml ? 'Hide' : 'Show'} content preview</button>
       <a class="muted" href="${esc(it.docUrl)}" target="_blank" rel="noopener" style="font-size:13px">Open Google Doc ↗</a></div>
       ${it.showHtml ? `<iframe srcdoc="${esc(previewDoc(it.html))}"></iframe>` : ''}</div></div>` : '';
-    const result = it.done ? `<div class="result"><b style="color:var(--pass)">✔ Uploaded to task ${esc(it.done.taskId)} — status: ${esc(it.done.status)}</b> · ${it.done.chars} characters · <a href="${esc(it.done.heroUrl)}" target="_blank" rel="noopener">hero image ↗</a></div>`
-      : isReady(it) ? `<div class="row" style="margin-top:10px"><button onclick="uploadOne(${i}, this)">Upload this row</button><span class="msg err" id="err${i}"></span></div>` : '';
+    // A draft that has content but was not submitted can be sent to the editor without uploading again.
+    const canSubmit = it.done ? !it.done.submitted : !it.errors.length && it.status === 'draft' && it.existingChars > 200;
+    const submitBtn = canSubmit ? `<button class="secondary" onclick="submitOne(${i}, this)">Submit for review (no re-upload)</button>` : '';
+    const result = it.done ? `<div class="result"><b style="color:var(--pass)">✔ Uploaded to task ${esc(it.done.taskId)} — ${it.done.submitted ? 'submitted, ready for the editor\'s review' : 'saved as draft'}</b> · ${it.done.chars ?? ''} characters${it.done.heroUrl ? ` · <a href="${esc(it.done.heroUrl)}" target="_blank" rel="noopener">hero image ↗</a>` : ''}
+        ${submitBtn ? `<div class="row" style="margin-top:6px">${submitBtn}<span class="msg err" id="err${i}"></span></div>` : ''}</div>`
+      : isReady(it) ? `<div class="row" style="margin-top:10px"><button onclick="uploadOne(${i}, this)">Upload this row</button>${submitBtn}<span class="msg err" id="err${i}"></span></div>` : '';
     return `<div class="card${it.skip && isReady(it) ? ' skipped' : ''}" id="item${i}"><div class="item-head">${pick}<b>Row ${it.row}</b>${pill}<span class="muted">${esc(it.title)}</span></div>${msgs}${body}${result}</div>`;
   }).join('');
   updateBar();
@@ -149,7 +153,7 @@ function updateBar() {
   $('bar').hidden = !ready;
   $('uploadAll').textContent = `Upload selected (${n})`; $('uploadAll').disabled = !n;
   $('selAll').checked = n === ready; $('selAll').indeterminate = n > 0 && n < ready;
-  $('selInfo').textContent = $('submit').checked ? 'Content goes to the editor for review.' : 'Saved as draft only — the editor does not get it yet.';
+  $('selInfo').textContent = $('submit').checked ? 'Content is uploaded and submitted — it goes to the editor for review.' : 'Saved as draft only — the editor does not get it until it is submitted.';
 }
 $('selAll').onchange = () => { items.forEach((it) => { if (isReady(it)) it.skip = !$('selAll').checked; }); render(); };
 $('submit').onchange = updateBar;
@@ -163,6 +167,12 @@ async function uploadOne(i, btn) {
   if (btn) { btn.disabled = true; btn.textContent = 'Uploading…'; }
   try { it.done = await api('api/upload', { row: it, submit: $('submit').checked }); render(); return true; }
   catch (e) { if (btn) { btn.disabled = false; btn.textContent = 'Upload this row'; } const el = $('err' + i); if (el) el.textContent = '✖ ' + e.message; return false; }
+}
+async function submitOne(i, btn) {
+  const it = items[i];
+  btn.disabled = true; btn.textContent = 'Submitting…';
+  try { const r = await api('api/submit', { taskId: it.taskId }); it.done = { ...(it.done || { taskId: it.taskId }), submitted: true, status: r.status }; render(); }
+  catch (e) { btn.disabled = false; btn.textContent = 'Submit for review (no re-upload)'; const el = $('err' + i); if (el) el.textContent = '✖ ' + e.message; }
 }
 $('uploadAll').onclick = async () => {
   const list = selected();
