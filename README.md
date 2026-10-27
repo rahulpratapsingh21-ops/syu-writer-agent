@@ -9,7 +9,7 @@ Uploads finished articles from Google Docs into the SYU CMS, as the writer accou
   Images in the doc (e.g. AI-detector screenshots) are not uploaded.
 - Makes a branded hero image (1280×720) and uploads it.
 - Date = today, author name = the sheet's Writer column.
-- Saves as a draft; optionally submits for the editor's review. Never publishes.
+- Saves as a draft and (by default) submits for the editor's review. Never publishes.
 
 Blogs only for now; college / exam / course silos are next.
 

@@ -47,9 +47,7 @@
   .result { margin-top:8px; font-size:14px; }
   .tabs { display:flex; gap:6px; margin:0 0 14px; }
   .tab { background:transparent; color:var(--muted); border:1px solid var(--line); }
-  .tab.on { background:var(--accent); color:#fff; border-color:var(--accent); }
   .tab.clear { color:var(--fail); border-color:var(--fail); }
-  .tabs .sep { width:1px; background:var(--line); margin:0 6px; }
   .sections { font-size:13px; margin:6px 0; padding-left:18px; } .sections li { margin:2px 0; }
   .test-opt { color:var(--warn); font-size:13px; }
   .choice { border:1px solid var(--warn); background:var(--warn-bg); border-radius:8px; padding:8px 12px; margin:8px 0; }
@@ -63,25 +61,7 @@
   <header class="brand"><img src="logo.png" alt="Select Your University" width="175" height="55"><h1>SYU Writer Agent - SYUW1 <span class="pill warn" style="vertical-align:middle">beta 0.0</span></h1>
     <div class="acct"><span class="muted">CMS login</span> <b id="acctEmail">…</b><br><a id="acctCms" href="#" target="_blank" rel="noopener">Open CMS ↗</a></div></header>
 
-  <div class="tabs"><button id="clearAll" class="tab clear" title="Reset everything on this page">↺ Clear all</button><span class="sep"></span><button id="modeSheet" class="tab on">📄 From Sheet</button><button id="modeManual" class="tab">✍️ Manual</button></div>
-
-  <div class="card" id="manualPanel" hidden>
-    <div class="step"><span class="num">1</span><b>Upload one Google Doc</b></div>
-    <div class="row">
-      <label>Task ID <input id="mTask" inputmode="numeric" style="width:110px" placeholder="e.g. 48598"></label>
-      <label style="flex:1;min-width:260px">Google Doc link <span class="muted">— or an SYU college / exam / course page link to copy its content</span><input id="mDoc" placeholder="https://docs.google.com/document/d/…/edit  or  https://www.selectyouruniversity.com/course/…"></label>
-    </div>
-    <div class="row" style="margin-top:8px">
-      <label style="flex:1;min-width:260px">H1 / page title <span class="muted">(optional — empty = the doc's Title line, or the agent writes one)</span><input id="mH1" placeholder="e.g. Muna College of Education, Cuddalore: Admission 2027-28, Courses, Fees…"></label>
-    </div>
-    <div class="row" style="margin-top:8px">
-      <label>Writer <select id="mWriter"><option value="">— choose writer —</option></select></label>
-      <label>Author name (blogs) <input id="mAuthor" style="width:200px" placeholder="shown on the blog"></label>
-      <button id="mPreview">Preview</button>
-      <span class="muted" id="mStatus"></span>
-    </div>
-    <label class="opt test-opt" style="margin-top:8px"><input type="checkbox" id="mTest"> Test: allow content about a different college / exam / course</label>
-  </div>
+  <div class="tabs"><button id="clearAll" class="tab clear" title="Reset everything on this page">↺ Clear all</button></div>
 
   <div id="sheetPanel">
   <div class="card">
@@ -132,33 +112,13 @@ api('api/account').then((a) => { $('acctEmail').textContent = a.email; $('acctCm
   .catch((e) => { $('acctEmail').textContent = 'not connected — ' + e.message; });
 $('url').value = store.get('wa-url') || '';
 
-// ---- mode switch, clear all, manual entry ---------------------------------------------------
-function setMode(m) {
-  $('modeSheet').classList.toggle('on', m === 'sheet'); $('modeManual').classList.toggle('on', m === 'manual');
-  $('sheetPanel').hidden = m !== 'sheet'; $('manualPanel').hidden = m !== 'manual';
-  items = []; render(); store.set('wa-mode', m);
-}
-$('modeSheet').onclick = () => setMode('sheet');
-$('modeManual').onclick = () => setMode('manual');
+// ---- clear all ------------------------------------------------------------------------------
 $('clearAll').onclick = () => {
   if (items.some((it) => !it.done) && !confirm('Clear everything on this page? (Content already uploaded to the CMS is not affected.)')) return;
   sheet = null; items = [];
   $('url').value = ''; store.set('wa-url', ''); $('sheetName').textContent = ''; $('step2').hidden = true; $('tab').innerHTML = '';
-  $('start').value = ''; $('end').value = ''; $('status').textContent = '';
-  for (const id of ['mTask', 'mDoc', 'mAuthor', 'mH1']) $(id).value = '';
-  $('mWriter').value = ''; $('mStatus').textContent = ''; $('mTest').checked = false; $('sTest').checked = false; testMode = false;
+  $('start').value = ''; $('end').value = ''; $('status').textContent = ''; $('sTest').checked = false; testMode = false;
   render();
-};
-api('api/writers').then((ws) => { $('mWriter').innerHTML = '<option value="">— choose writer —</option>' + ws.map((w) => `<option value="${esc(w.name)}">${esc(w.name)} (${esc(w.email)})</option>`).join(''); })
-  .catch(() => {});
-$('mWriter').onchange = () => { $('mAuthor').value = $('mWriter').value; };
-$('mPreview').onclick = async () => {
-  const row = { row: 1, manual: true, taskId: $('mTask').value.trim(), docUrl: $('mDoc').value.trim(), writer: $('mAuthor').value.trim(), h1Override: $('mH1').value.trim() };
-  if (!row.taskId || !row.docUrl) { $('mStatus').textContent = 'Enter the Task ID and the Google Doc link'; return; }
-  $('mPreview').disabled = true; $('mStatus').textContent = 'Reading the Google Doc and the CMS draft…'; items = []; render();
-  testMode = $('mTest').checked;
-  try { items = [await api('api/preview-manual', { ...row, allowOtherEntity: testMode })]; $('mStatus').textContent = ''; } catch (e) { $('mStatus').textContent = 'Error: ' + e.message; }
-  render(); $('mPreview').disabled = false;
 };
 
 $('connect').onclick = async () => {
@@ -237,7 +197,7 @@ function render() {
     const result = it.done ? `<div class="result"><b style="color:var(--pass)">✔ Uploaded to task ${esc(it.done.taskId)} — ${it.done.submitted ? 'submitted, ready for the editor\'s review' : 'saved as draft'}</b> · ${it.done.chars ?? ''} characters${it.done.heroUrl ? ` · <a href="${esc(it.done.heroUrl)}" target="_blank" rel="noopener">hero image ↗</a>` : ''}
         ${submitBtn ? `<div class="row" style="margin-top:6px">${submitBtn}<span class="msg err" id="err${i}"></span></div>` : ''}</div>`
       : isReady(it) ? `<div class="row" style="margin-top:10px"><button onclick="uploadOne(${i}, this)">Upload this row</button>${submitBtn}<span class="msg err" id="err${i}"></span></div>` : '';
-    return `<div class="card${it.skip && isReady(it) ? ' skipped' : ''}" id="item${i}"><div class="item-head">${pick}<b>${it.manual ? `Task ${esc(it.taskId)}` : `Row ${it.row}`}</b>${pill}<span class="muted">${esc(it.title || it.taskTitle || '')}</span></div>${msgs}${body}${result}</div>`;
+    return `<div class="card${it.skip && isReady(it) ? ' skipped' : ''}" id="item${i}"><div class="item-head">${pick}<b>Row ${it.row}</b>${pill}<span class="muted">${esc(it.title || it.taskTitle || '')}</span></div>${msgs}${body}${result}</div>`;
   }).join('');
   updateBar();
 }
@@ -287,8 +247,8 @@ $('uploadAll').onclick = async () => {
   busy = false; updateBar();
 };
 
-// Last, once every function above exists: reopen the tab used last time and draw the (empty) page.
-setMode(store.get('wa-mode') === 'manual' ? 'manual' : 'sheet');
+// Last, once every function above exists: draw the (empty) page.
+render();
 </script>
 </body>
 </html>

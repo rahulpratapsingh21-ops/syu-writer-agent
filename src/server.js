@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { parseSheetUrl, connectSheet, readRows } from './sheets.js';
 import { prepare, upload, submitDraft } from './upload.js';
 import { makeHero } from './hero.js';
-import { getMe, cmsUrl, cmsGet } from './cms.js';
+import { getMe, cmsUrl } from './cms.js';
 
 const app = express();
 app.use(express.json({ limit: '2mb' }));
@@ -36,14 +36,6 @@ app.post('/api/preview', route(async (req) => {
 }));
 // Re-read one row (e.g. after its silo was picked from the dropdown).
 app.post('/api/preview-row', route((req) => prepare(req.body.row, { allowOtherEntity: !!req.body.allowOtherEntity })));
-app.post('/api/preview-manual', route((req) => prepare({ row: 1, manual: true, ...req.body }, { allowOtherEntity: !!req.body.allowOtherEntity })));
-// Writers for the manual dropdown; the display name ("Puja Das") is used as the blog author name.
-app.get('/api/writers', route(async () => {
-  const users = (await cmsGet('/users?limit=500&depth=1')).docs.filter((u) => /writer/i.test(u.role?.name || ''));
-  const nameOf = (u) => (u.name && !/^content writer$/i.test(u.name) ? u.name
-    : u.email.split('@')[0].replace(/^update_/, '').split(/[._-]/).filter((w) => !/^(cw|ce)$/.test(w)).map((w) => w[0].toUpperCase() + w.slice(1)).join(' '));
-  return users.map((u) => ({ email: u.email, name: nameOf(u) })).sort((a, b) => a.name.localeCompare(b.name));
-}));
 app.get('/api/hero', async (req, res) => {
   try { res.type('image/webp').send(await makeHero(String(req.query.h1 || ''))); } catch (e) { res.status(400).send(e.message); }
 });
