@@ -8,6 +8,7 @@
   :root { --bg:#f6f7f9; --card:#fff; --text:#1b1f24; --muted:#667085; --line:#e4e7ec; --pass:#12805c; --pass-bg:#e7f6ef; --warn:#a15c00; --warn-bg:#fff4e0; --fail:#c0352b; --fail-bg:#fdecea; --accent:#d6246e; }
   @media (prefers-color-scheme: dark) { :root { --bg:#121417; --card:#1b1e23; --text:#e8eaed; --muted:#98a2b3; --line:#2c3138; --pass:#4cc38a; --pass-bg:#16301f; --warn:#f0b54a; --warn-bg:#352a12; --fail:#f2766b; --fail-bg:#3a1c1a; --accent:#f05a9a; } }
   * { box-sizing:border-box; }
+  [hidden] { display:none !important; } /* "hidden" must win over display:flex (e.g. the Upload bar) */
   body { margin:0; background:var(--bg); color:var(--text); font:15px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif; }
   main { max-width:1200px; margin:0 auto; padding:20px 16px 60px; }
   h1 { font-size:22px; margin:0; }
@@ -158,7 +159,6 @@ $('mPreview').onclick = async () => {
   try { items = [await api('api/preview-manual', { ...row, allowOtherEntity: testMode })]; $('mStatus').textContent = ''; } catch (e) { $('mStatus').textContent = 'Error: ' + e.message; }
   render(); $('mPreview').disabled = false;
 };
-if (store.get('wa-mode') === 'manual') setMode('manual');
 
 $('connect').onclick = async () => {
   $('connect').disabled = true; $('sheetName').textContent = 'Connecting…'; $('step2').hidden = true; items = []; render();
@@ -270,6 +270,9 @@ $('uploadAll').onclick = async () => {
   for (const i of list) { $('uploadAll').textContent = `Uploading ${++n} of ${list.length}…`; await uploadOne(i, document.querySelector(`#item${i} button[onclick^="uploadOne"]`)); }
   busy = false; updateBar();
 };
+
+// Last, once every function above exists: reopen the tab used last time and draw the (empty) page.
+setMode(store.get('wa-mode') === 'manual' ? 'manual' : 'sheet');
 </script>
 </body>
 </html>
