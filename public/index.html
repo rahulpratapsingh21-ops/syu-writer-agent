@@ -44,6 +44,12 @@
   .chip { font-size:12px; background:var(--bg); border:1px solid var(--line); border-radius:99px; padding:2px 9px; }
   iframe { width:100%; height:520px; border:1px solid var(--line); border-radius:8px; background:#fff; margin-top:8px; }
   .result { margin-top:8px; font-size:14px; }
+  .tabs { display:flex; gap:6px; margin:0 0 14px; }
+  .tab { background:transparent; color:var(--muted); border:1px solid var(--line); }
+  .tab.on { background:var(--accent); color:#fff; border-color:var(--accent); }
+  .tab.clear { color:var(--fail); border-color:var(--fail); }
+  .tabs .sep { width:1px; background:var(--line); margin:0 6px; }
+  .sections { font-size:13px; margin:6px 0; padding-left:18px; } .sections li { margin:2px 0; }
   @media (max-width:760px) { .grid { grid-template-columns:1fr; } .brand h1 { padding-left:0; border-left:0; font-size:19px; } .acct { margin-left:0; width:100%; text-align:left; } }
 </style>
 </head>
@@ -52,6 +58,24 @@
   <header class="brand"><img src="logo.png" alt="Select Your University" width="175" height="55"><h1>SYU Writer Agent - SYUW1 <span class="pill warn" style="vertical-align:middle">beta 0.0</span></h1>
     <div class="acct"><span class="muted">CMS login</span> <b id="acctEmail">…</b><br><a id="acctCms" href="#" target="_blank" rel="noopener">Open CMS ↗</a></div></header>
 
+  <div class="tabs"><button id="clearAll" class="tab clear" title="Reset everything on this page">↺ Clear all</button><span class="sep"></span><button id="modeSheet" class="tab on">📄 From Sheet</button><button id="modeManual" class="tab">✍️ Manual</button></div>
+
+  <div class="card" id="manualPanel" hidden>
+    <div class="step"><span class="num">1</span><b>Upload one Google Doc</b></div>
+    <div class="row">
+      <label>Task ID <input id="mTask" inputmode="numeric" style="width:110px" placeholder="e.g. 48598"></label>
+      <label style="flex:1;min-width:260px">Google Doc link <input id="mDoc" placeholder="https://docs.google.com/document/d/…/edit"></label>
+    </div>
+    <div class="row" style="margin-top:8px">
+      <label>Writer <select id="mWriter"><option value="">— choose writer —</option></select></label>
+      <label>Author name (blogs) <input id="mAuthor" style="width:200px" placeholder="shown on the blog"></label>
+      <label style="flex:1;min-width:240px">Live URL <span class="muted">(only for a college / exam / course task with several silos)</span><input id="mLive" placeholder="https://www.selectyouruniversity.com/college/…"></label>
+      <button id="mPreview">Preview</button>
+      <span class="muted" id="mStatus"></span>
+    </div>
+  </div>
+
+  <div id="sheetPanel">
   <div class="card">
     <div class="step"><span class="num">1</span><b>Google Sheet</b></div>
     <div class="row">
@@ -70,7 +94,8 @@
       <button id="preview">Preview</button>
       <span class="muted" id="status"></span>
     </div>
-    <div class="muted" style="margin-top:8px;font-size:13px">Each row needs a <b>Task ID</b>, <b>Doc URL</b> and <b>Writer</b>. The agent opens the Google Doc, finds the task's draft in the CMS and shows what will be uploaded. Nothing is uploaded until you click <b>Upload</b>.</div>
+    <div class="muted" style="margin-top:8px;font-size:13px">Each row needs a <b>Task ID</b> and <b>Doc URL</b>; blogs also need the <b>Writer</b> (author name). For a college / exam / course task with several silos, put the silo page link in <b>Live URL</b>. Nothing is uploaded until you click <b>Upload</b>.</div>
+  </div>
   </div>
 
   <div class="bar" id="bar" hidden>
@@ -96,6 +121,35 @@ let sheet = null, items = [], busy = false;
 api('api/account').then((a) => { $('acctEmail').textContent = a.email; $('acctCms').href = a.cmsUrl.replace(/\/$/, '') + '/admin'; })
   .catch((e) => { $('acctEmail').textContent = 'not connected — ' + e.message; });
 $('url').value = store.get('wa-url') || '';
+
+// ---- mode switch, clear all, manual entry ---------------------------------------------------
+function setMode(m) {
+  $('modeSheet').classList.toggle('on', m === 'sheet'); $('modeManual').classList.toggle('on', m === 'manual');
+  $('sheetPanel').hidden = m !== 'sheet'; $('manualPanel').hidden = m !== 'manual';
+  items = []; render(); store.set('wa-mode', m);
+}
+$('modeSheet').onclick = () => setMode('sheet');
+$('modeManual').onclick = () => setMode('manual');
+$('clearAll').onclick = () => {
+  if (items.some((it) => !it.done) && !confirm('Clear everything on this page? (Content already uploaded to the CMS is not affected.)')) return;
+  sheet = null; items = [];
+  $('url').value = ''; store.set('wa-url', ''); $('sheetName').textContent = ''; $('step2').hidden = true; $('tab').innerHTML = '';
+  $('start').value = ''; $('end').value = ''; $('status').textContent = '';
+  for (const id of ['mTask', 'mDoc', 'mAuthor', 'mLive']) $(id).value = '';
+  $('mWriter').value = ''; $('mStatus').textContent = '';
+  render();
+};
+api('api/writers').then((ws) => { $('mWriter').innerHTML = '<option value="">— choose writer —</option>' + ws.map((w) => `<option value="${esc(w.name)}">${esc(w.name)} (${esc(w.email)})</option>`).join(''); })
+  .catch(() => {});
+$('mWriter').onchange = () => { $('mAuthor').value = $('mWriter').value; };
+$('mPreview').onclick = async () => {
+  const row = { row: 1, manual: true, taskId: $('mTask').value.trim(), docUrl: $('mDoc').value.trim(), writer: $('mAuthor').value.trim(), liveUrl: $('mLive').value.trim() };
+  if (!row.taskId || !row.docUrl) { $('mStatus').textContent = 'Enter the Task ID and the Google Doc link'; return; }
+  $('mPreview').disabled = true; $('mStatus').textContent = 'Reading the Google Doc and the CMS draft…'; items = []; render();
+  try { items = [await api('api/preview-manual', row)]; $('mStatus').textContent = ''; } catch (e) { $('mStatus').textContent = 'Error: ' + e.message; }
+  render(); $('mPreview').disabled = false;
+};
+if (store.get('wa-mode') === 'manual') setMode('manual');
 
 $('connect').onclick = async () => {
   $('connect').disabled = true; $('sheetName').textContent = 'Connecting…'; $('step2').hidden = true; items = []; render();
@@ -131,9 +185,17 @@ function render() {
       : it.errors.length ? '<span class="pill fail">CANNOT UPLOAD</span>' : `<span class="pill warn">READY · draft ${esc(it.status || '')}</span>`;
     const msgs = it.errors.map((e) => `<div class="msg err">✖ ${esc(e)}</div>`).join('') + it.warnings.map((w) => `<div class="msg wrn">⚠ ${esc(w)}</div>`).join('');
     const chips = it.stats ? `<div class="chips">${Object.entries(statLabels).map(([k, l]) => `<span class="chip">${it.stats[k]} ${l}</span>`).join('')}</div>` : '';
-    const body = it.h1 ? `<div class="grid"><div><img loading="lazy" src="api/hero?h1=${encodeURIComponent(it.h1)}" alt="Hero image preview"><div class="muted" style="font-size:12px;margin-top:4px">Hero image (made by the agent)</div></div>
-      <div><p class="h1">${esc(it.h1)}</p><div class="muted" style="font-size:13px">Task ${esc(it.taskId)} · subtask ${esc(it.subTaskId ?? '—')} · /blog/${esc(it.pageUrl ?? '')} · author: <b>${esc(it.writer)}</b> · date: today</div>
-      ${chips}<div style="font-size:14px">${esc(it.excerpt)}</div>
+    const isSilo = it.category && it.category !== 'blogs';
+    const side = isSilo
+      ? `<div><b style="font-size:14px">${esc(it.silo || '')}</b> <span class="muted" style="font-size:12px">(${esc((it.category || '').slice(0, -1))} silo)</span>
+          <div class="muted" style="font-size:12px;margin-top:4px">Sections the doc fills:</div><ul class="sections">${(it.sections || []).map((s) => `<li>✔ ${esc(s.title)}</li>`).join('') || '<li>—</li>'}</ul>
+          ${it.untouched?.length ? `<div class="muted" style="font-size:12px">Kept as they are: ${esc(it.untouched.join(', '))}</div>` : ''}</div>`
+      : `<div><img loading="lazy" src="api/hero?h1=${encodeURIComponent(it.h1)}" alt="Hero image preview"><div class="muted" style="font-size:12px;margin-top:4px">Hero image (made by the agent)</div></div>`;
+    const meta = isSilo ? `Task ${esc(it.taskId)} · subtask ${esc(it.subTaskId ?? '—')} · page: ${esc(it.pageUrl ?? '')} · H1 = page title`
+      : `Task ${esc(it.taskId)} · subtask ${esc(it.subTaskId ?? '—')} · /blog/${esc(it.pageUrl ?? '')} · author: <b>${esc(it.writer)}</b> · date: today`;
+    const body = it.h1 ? `<div class="grid">${side}
+      <div><p class="h1">${esc(it.h1)}</p><div class="muted" style="font-size:13px">${meta}</div>
+      ${chips}<div style="font-size:14px">${esc(it.excerpt || '')}</div>
       <div class="row" style="margin-top:8px"><button class="secondary small" onclick="togglePreview(${i})">${it.showHtml ? 'Hide' : 'Show'} content preview</button>
       <a class="muted" href="${esc(it.docUrl)}" target="_blank" rel="noopener" style="font-size:13px">Open Google Doc ↗</a></div>
       ${it.showHtml ? `<iframe srcdoc="${esc(previewDoc(it.html))}"></iframe>` : ''}</div></div>` : '';
@@ -143,7 +205,7 @@ function render() {
     const result = it.done ? `<div class="result"><b style="color:var(--pass)">✔ Uploaded to task ${esc(it.done.taskId)} — ${it.done.submitted ? 'submitted, ready for the editor\'s review' : 'saved as draft'}</b> · ${it.done.chars ?? ''} characters${it.done.heroUrl ? ` · <a href="${esc(it.done.heroUrl)}" target="_blank" rel="noopener">hero image ↗</a>` : ''}
         ${submitBtn ? `<div class="row" style="margin-top:6px">${submitBtn}<span class="msg err" id="err${i}"></span></div>` : ''}</div>`
       : isReady(it) ? `<div class="row" style="margin-top:10px"><button onclick="uploadOne(${i}, this)">Upload this row</button>${submitBtn}<span class="msg err" id="err${i}"></span></div>` : '';
-    return `<div class="card${it.skip && isReady(it) ? ' skipped' : ''}" id="item${i}"><div class="item-head">${pick}<b>Row ${it.row}</b>${pill}<span class="muted">${esc(it.title)}</span></div>${msgs}${body}${result}</div>`;
+    return `<div class="card${it.skip && isReady(it) ? ' skipped' : ''}" id="item${i}"><div class="item-head">${pick}<b>${it.manual ? `Task ${esc(it.taskId)}` : `Row ${it.row}`}</b>${pill}<span class="muted">${esc(it.title || it.taskTitle || '')}</span></div>${msgs}${body}${result}</div>`;
   }).join('');
   updateBar();
 }
@@ -171,7 +233,7 @@ async function uploadOne(i, btn) {
 async function submitOne(i, btn) {
   const it = items[i];
   btn.disabled = true; btn.textContent = 'Submitting…';
-  try { const r = await api('api/submit', { taskId: it.taskId }); it.done = { ...(it.done || { taskId: it.taskId }), submitted: true, status: r.status }; render(); }
+  try { const r = await api('api/submit', { taskId: it.taskId, liveUrl: it.liveUrl }); it.done = { ...(it.done || { taskId: it.taskId }), submitted: true, status: r.status }; render(); }
   catch (e) { btn.disabled = false; btn.textContent = 'Submit for review (no re-upload)'; const el = $('err' + i); if (el) el.textContent = '✖ ' + e.message; }
 }
 $('uploadAll').onclick = async () => {

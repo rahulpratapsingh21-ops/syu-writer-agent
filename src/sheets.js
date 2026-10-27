@@ -44,6 +44,7 @@ const COLS = {
   writer: /^writer$/i,
   docUrl: /^doc\s*url$/i,
   category: /^(category|content\s*type)$/i,
+  liveUrl: /^(live\s*url|url|page\s*url|silo\s*url)$/i, // which silo of a college/exam/course task the doc is for
 };
 
 /** Rows from start (to end, or the last row with a Task ID; max 50): [{ row, title, taskId, writer, docUrl, category }] */
@@ -67,7 +68,7 @@ export async function readRows(sheetId, gid, start, end = null) {
   for (let n = start; n <= stop; n++) {
     const row = rows[n - 1] || [];
     if (!cell(row, 'taskId') && !cell(row, 'docUrl')) continue;
-    list.push({ row: n, title: cell(row, 'title'), taskId: cell(row, 'taskId'), writer: cell(row, 'writer'), docUrl: cell(row, 'docUrl'), category: cell(row, 'category') });
+    list.push({ row: n, title: cell(row, 'title'), taskId: cell(row, 'taskId'), writer: cell(row, 'writer'), docUrl: cell(row, 'docUrl'), category: cell(row, 'category'), liveUrl: cell(row, 'liveUrl') });
   }
   return list;
 }

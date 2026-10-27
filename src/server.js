@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { parseSheetUrl, connectSheet, readRows } from './sheets.js';
 import { prepare, upload, submitDraft } from './upload.js';
 import { makeHero } from './hero.js';
-import { getMe, cmsUrl } from './cms.js';
+import { getMe, cmsUrl, cmsGet } from './cms.js';
 
 const app = express();
 app.use(express.json({ limit: '2mb' }));
@@ -33,6 +33,14 @@ app.post('/api/preview', route(async (req) => {
   for (const r of rows) out.push(await prepare(r)); // one at a time: each row reads a Google Doc and the CMS
   return out;
 }));
+app.post('/api/preview-manual', route((req) => prepare({ row: 1, manual: true, ...req.body })));
+// Writers for the manual dropdown; the display name ("Puja Das") is used as the blog author name.
+app.get('/api/writers', route(async () => {
+  const users = (await cmsGet('/users?limit=500&depth=1')).docs.filter((u) => /writer/i.test(u.role?.name || ''));
+  const nameOf = (u) => (u.name && !/^content writer$/i.test(u.name) ? u.name
+    : u.email.split('@')[0].replace(/^update_/, '').split(/[._-]/).filter((w) => !/^(cw|ce)$/.test(w)).map((w) => w[0].toUpperCase() + w.slice(1)).join(' '));
+  return users.map((u) => ({ email: u.email, name: nameOf(u) })).sort((a, b) => a.name.localeCompare(b.name));
+}));
 app.get('/api/hero', async (req, res) => {
   try { res.type('image/webp').send(await makeHero(String(req.query.h1 || ''))); } catch (e) { res.status(400).send(e.message); }
 });
@@ -42,7 +50,7 @@ app.post('/api/upload', route(async (req) => {
   return r;
 }));
 app.post('/api/submit', route(async (req) => {
-  const r = await submitDraft(req.body.taskId);
+  const r = await submitDraft(req.body.taskId, req.body.liveUrl);
   console.log(`[submit] task ${r.taskId}: ${r.status}`);
   return r;
 }));
